@@ -617,7 +617,30 @@ def generate_audio(
         if voxcpm_prompt_audio is not None:
             tts_kwargs["voxcpm_prompt_audio"] = voxcpm_prompt_audio
             tts_kwargs["voxcpm_prompt_text"] = voxcpm_prompt_text
-        sub_maker = voice.tts(**tts_kwargs)
+        sub_maker = None
+        try:
+            from app.services import director_characters
+
+            protagonists = director_characters.protagonists_from_settings()
+            if len(protagonists) == 1:
+                director_characters.apply_character_to_bible(
+                    {"voice_ref": protagonists[0].voice_ref}, protagonists[0]
+                )
+            if len(protagonists) >= 2 and director_characters.parse_dialogue_line(
+                next((line for line in str(video_script or "").splitlines() if line.strip()), "")
+            ):
+                sub_maker = director_characters.tts_dialogue(
+                    script=video_script,
+                    characters=protagonists,
+                    voice_name=tts_kwargs["voice_name"],
+                    voice_rate=params.voice_rate,
+                    output_path=audio_file,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"director dialogue TTS skipped: {exc}")
+            sub_maker = None
+        if sub_maker is None:
+            sub_maker = voice.tts(**tts_kwargs)
         if sub_maker is None:
             _mark_task_failed(
                 task_id,

@@ -9,7 +9,7 @@ from pathlib import Path
 import streamlit as st
 
 from app.config import config
-from app.services import comfyui_director, director_face
+from app.services import comfyui_director, director_characters, director_face
 
 
 def _persist(key: str, value) -> None:
@@ -205,167 +205,376 @@ def render(params) -> None:
         "(OpenRouter, Ollama u OpenAI-compatible, por ejemplo MiniMax)."
     )
 
-    st.markdown("**🎬 Clonar personaje**")
+    st.markdown("**🎬 Protagonistas**")
+    characters = director_characters.list_characters()
+    if not characters:
+        st.caption(
+            "Todavía no hay personajes en el catálogo. Crealos en la pestaña "
+            "🎬 Personajes y después elegilos acá."
+        )
+        _persist("protagonists", "")
+    else:
+        labels = {char.slug: char.name for char in characters}
+        saved = [
+            part.strip()
+            for part in str(settings.get("protagonists") or "").split(",")
+            if part.strip()
+        ]
+        default = [slug for slug in saved if slug in labels]
+        selected = st.multiselect(
+            "🎬 Protagonistas del video",
+            options=[char.slug for char in characters],
+            default=default,
+            format_func=lambda slug: labels.get(slug, slug),
+            key="director_protagonists",
+            help=(
+                "Opcional. Con uno, se usa su cara (PuLID) y su voz (Chatterbox). "
+                "Con dos o más, se alternan los planos y las réplicas (estilo diálogo). "
+                "No hay dos caras en el mismo cuadro ni lip-sync."
+            ),
+        )
+        _persist("protagonists", ",".join(selected))
+        if selected:
+            st.session_state["tts_server_select"] = "chatterbox"
+            st.session_state["speech_synthesis_select_chatterbox"] = (
+                comfyui_director.CLONED_VOICE_NAME
+            )
+            cols = st.columns(min(4, len(selected)))
+            for index, slug in enumerate(selected):
+                char = director_characters.load_character(slug)
+                if not char:
+                    continue
+                with cols[index % len(cols)]:
+                    if char.thumb():
+                        st.image(char.thumb(), width=120)
+                    st.caption(char.name)
+                    if not char.voice_ref:
+                        st.caption("Sin voz todavía.")
+            if len(selected) >= 2:
+                st.caption(
+                    "Varios protagonistas: el guion va en réplicas `Nombre:` y cada "
+                    "escena muestra a una sola persona, alternando."
+                )
+
+    has_selection = bool(str(settings.get("protagonists") or "").strip())
+    existing = comfyui_director.current_voice_ref()
+    if existing and Path(existing).is_file() and not has_selection:
+        st.caption(f"Referencia de voz de la biblia: {existing}")
+        st.audio(existing)
+    existing_face = director_face.current_face_ref()
+    if existing_face and Path(existing_face).is_file() and not has_selection:
+        st.caption(f"Referencia de cara de la biblia: {existing_face}")
+        st.image(existing_face, width=160)
+
+
+def render_placeholder_scenes() -> None:
+    st.markdown('<div class="director-fork-marker"></div>', unsafe_allow_html=True)
+    st.caption("Nuevo (fork director)")
+    st.markdown("**🎬 Escenas**")
+    st.info(
+        "Próximamente: foto de una escena y asignación de varias personas a ese plano. "
+        "Por ahora los personajes se arman en 🎬 Personajes y se eligen como protagonistas "
+        "en 🎬 Generar video."
+    )
+
+
+def render_placeholder_improve() -> None:
+    st.markdown('<div class="director-fork-marker"></div>', unsafe_allow_html=True)
+    st.caption("Nuevo (fork director)")
+    st.markdown("**🎬 Mejorar**")
+    st.info(
+        "Próximamente: upscale, interpolación de fotogramas y restauración de caras. "
+        "Todavía no está en esta etapa."
+    )
+
+
+def render_characters() -> None:
+    st.markdown('<div class="director-fork-marker"></div>', unsafe_allow_html=True)
+    st.caption("Nuevo (fork director)")
+    st.markdown("**🎬 Personajes**")
     st.caption(
         "Solo usá voz y cara de personas que te hayan dado consentimiento. "
-        "El mismo video, foto o URL sirve para extraer las dos referencias. "
-        "Si en el audio hablan varias personas, elegí un inicio y un fin donde "
-        "hable solo quien querés clonar (por ahora no hay diarización de voces)."
+        "Subí un video, una foto o pegá una URL: detecto las caras, separo locutores "
+        "si hay audio, y armás un personaje por persona (estilo Google Fotos). "
+        "Si el diarizado no alcanza, recortá un inicio y un fin donde hable solo "
+        "quien querés clonar, o asigná a mano cada muestra de voz."
     )
-    uploaded_voice = st.file_uploader(
-        "🎬 Video, audio o foto para clonar voz y cara",
+
+    uploaded = st.file_uploader(
+        "🎬 Video, audio o foto",
         type=["wav", "mp3", "m4a", "flac", "ogg", "mp4", "mkv", "webm", "mov", "jpg", "jpeg", "png", "webp", "bmp"],
-        key="director_voice_uploader",
+        key="director_cast_uploader",
     )
-    voice_url = st.text_input(
+    source_url = st.text_input(
         "🎬 URL de YouTube u otro video",
-        key="director_voice_url",
+        key="director_cast_url",
         placeholder="https://www.youtube.com/watch?v=...",
-        help="Se descarga el audio y un video corto (hasta 720p) con yt-dlp para extraer voz y cara.",
     )
-    start_col, end_col, video_col = st.columns(3)
-    voice_start = start_col.number_input(
+    start_col, end_col, keep_col = st.columns(3)
+    start_s = start_col.number_input(
         "🎬 Inicio (s)",
         min_value=0.0,
         value=0.0,
         step=1.0,
-        key="director_voice_start",
-        help="Segundo desde el que cortar la muestra de voz (y el tramo a muestrear para caras).",
+        key="director_cast_start",
+        help="Recorte opcional. También sirve como respaldo si hablan varios y el diarizado falla.",
     )
-    voice_end = end_col.number_input(
+    end_s = end_col.number_input(
         "🎬 Fin (s)",
         min_value=0.0,
         value=0.0,
         step=1.0,
-        key="director_voice_end",
-        help="0 = tomar unos 25 s desde el inicio indicado.",
+        key="director_cast_end",
+        help="0 = usar el tramo por defecto (unos 25 s) o el video completo para caras.",
     )
-    save_source_video = video_col.checkbox(
+    keep_video = keep_col.checkbox(
         "🎬 Conservar el video descargado",
-        key="director_save_source_video",
-        help="Si está apagado, igual bajo un video temporal para detectar caras y después lo puedo borrar.",
+        key="director_cast_keep_video",
     )
-    if st.button("🎬 Extraer voz y caras", key="director_extract_voice"):
-        if uploaded_voice is None and not str(voice_url or "").strip():
-            st.error("Subí un archivo o pegá una URL de YouTube (u otro video).")
+    if st.button("🎬 Detectar personas", key="director_detect_cast"):
+        if uploaded is None and not str(source_url or "").strip():
+            st.error("Subí un archivo o pegá una URL.")
         else:
             try:
-                start_s, duration_s = comfyui_director._parse_clip_window(
-                    voice_start, voice_end
+                _extract_cast_to_session(
+                    uploaded=uploaded,
+                    source_url=str(source_url or "").strip(),
+                    start_s=start_s,
+                    end_s=end_s,
+                    keep_video=bool(keep_video),
                 )
-                slug = re.sub(
-                    r"[^a-zA-Z0-9_-]+",
-                    "-",
-                    (Path(str(settings.get("bible") or "personaje")).stem or "personaje").lower(),
-                ).strip("-") or "personaje"
-                dest_dir = comfyui_director.voices_dir() / slug
-                image_suffixes = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
-                video_suffixes = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v"}
-                notes = []
-                visual_source = None
-                video_path = None
-                with st.spinner("Extrayendo voz y detectando caras..."):
-                    if str(voice_url or "").strip():
-                        source, video_path = comfyui_director.download_source_from_url(
-                            voice_url,
-                            dest_dir,
-                            save_video=True,
-                        )
-                    else:
-                        suffix = Path(uploaded_voice.name or "fuente.bin").suffix.lower() or ".bin"
-                        dest_dir.mkdir(parents=True, exist_ok=True)
-                        source = dest_dir / f"upload{suffix}"
-                        source.write_bytes(uploaded_voice.getbuffer())
-                        video_path = source if suffix in video_suffixes else None
-                    is_image = source.suffix.lower() in image_suffixes
-                    if is_image:
-                        notes.append("El archivo es una foto: no hay audio para clonar la voz.")
-                    else:
-                        dest = comfyui_director.extract_voice_reference(
-                            source,
-                            dest_dir / "voice_ref.wav",
-                            max_seconds=duration_s,
-                            start_seconds=start_s,
-                        )
-                        comfyui_director.save_voice_ref_in_bible(dest, bible_rel)
-                        st.session_state["tts_server_select"] = "chatterbox"
-                        st.session_state["speech_synthesis_select_chatterbox"] = (
-                            comfyui_director.CLONED_VOICE_NAME
-                        )
-                        notes.append(f"Voz: {dest}")
-                        st.audio(str(dest))
-                    if video_path and Path(video_path).is_file():
-                        visual_source = Path(video_path)
-                    elif is_image:
-                        visual_source = Path(source)
-                    elif source.suffix.lower() in video_suffixes:
-                        visual_source = Path(source)
-                    if visual_source is not None:
-                        face_dir = director_face.faces_dir() / slug
-                        candidates = director_face.extract_face_candidates(
-                            visual_source, face_dir
-                        )
-                        st.session_state["director_face_candidates"] = [
-                            {
-                                "cluster_id": c.cluster_id,
-                                "count": c.count,
-                                "crop_path": c.crop_path,
-                                "thumb_path": c.thumb_path,
-                            }
-                            for c in candidates
-                        ]
-                        if len(candidates) == 1:
-                            saved = director_face.save_face_ref_in_bible(
-                                candidates[0].crop_path, bible_rel
-                            )
-                            notes.append(
-                                f"Había una sola persona: guardé su cara en {candidates[0].crop_path}."
-                            )
-                        else:
-                            notes.append(
-                                f"Encontré {len(candidates)} personas. Elegí cuál clonar."
-                            )
-                    else:
-                        st.session_state.pop("director_face_candidates", None)
-                        notes.append(
-                            "No había un video o una foto para buscar caras. "
-                            "Si pegaste una URL, revisá que yt-dlp haya podido bajar el video."
-                        )
-                    if video_path and not save_source_video and str(voice_url or "").strip():
-                        try:
-                            Path(video_path).unlink(missing_ok=True)
-                        except OSError:
-                            pass
-                extra = " ".join(notes)
-                st.success(extra or "Listo.")
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 st.error(str(exc))
 
-    candidates = st.session_state.get("director_face_candidates") or []
-    if len(candidates) > 1:
-        st.markdown("**🎬 ¿A quién querés clonar?**")
-        st.caption("Una miniatura por persona. Elegí la cara que va a la biblia.")
-        cols = st.columns(min(4, len(candidates)))
-        for index, cand in enumerate(candidates):
-            with cols[index % len(cols)]:
-                if Path(cand["thumb_path"]).is_file():
-                    st.image(cand["thumb_path"])
-                st.caption(f"Persona {cand['cluster_id']} · {cand['count']} tomas")
-                if st.button(
-                    f"🎬 Usar persona {cand['cluster_id']}",
-                    key=f"director_pick_face_{cand['cluster_id']}",
-                ):
-                    try:
-                        director_face.save_face_ref_in_bible(cand["crop_path"], bible_rel)
-                        st.success(f"Guardé la cara en {cand['crop_path']}.")
-                    except Exception as exc:
-                        st.error(str(exc))
+    _render_cast_draft()
+    _render_character_catalog()
 
-    existing = comfyui_director.current_voice_ref()
-    if existing and Path(existing).is_file():
-        st.caption(f"Referencia de voz actual: {existing}")
-        st.audio(existing)
-    existing_face = director_face.current_face_ref()
-    if existing_face and Path(existing_face).is_file():
-        st.caption(f"Referencia de cara actual: {existing_face}")
-        st.image(existing_face, width=160)
+
+def _extract_cast_to_session(*, uploaded, source_url: str, start_s: float, end_s: float, keep_video: bool) -> None:
+    start_clip, duration_s = comfyui_director._parse_clip_window(start_s, end_s)
+    work_dir = director_characters.characters_dir() / "_inbox"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    image_suffixes = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+    video_suffixes = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v"}
+    video_path = None
+    with st.spinner("Detectando caras y locutores..."):
+        if source_url:
+            source, video_path = comfyui_director.download_source_from_url(
+                source_url, work_dir, save_video=True
+            )
+        else:
+            suffix = Path(uploaded.name or "fuente.bin").suffix.lower() or ".bin"
+            source = work_dir / f"upload{suffix}"
+            source.write_bytes(uploaded.getbuffer())
+            video_path = source if suffix in video_suffixes else None
+        is_image = source.suffix.lower() in image_suffixes
+        visual = None
+        if video_path and Path(video_path).is_file():
+            visual = Path(video_path)
+        elif is_image or source.suffix.lower() in video_suffixes:
+            visual = Path(source)
+
+        faces = []
+        if visual is not None:
+            faces = director_face.extract_face_candidates(visual, work_dir / "faces")
+        speakers = []
+        audio_source = None if is_image else Path(source)
+        if audio_source and audio_source.is_file():
+            try:
+                speakers = director_characters.diarize_speakers(
+                    audio_source,
+                    work_dir / "speakers",
+                    start_seconds=start_clip,
+                    duration_seconds=duration_s if end_s or start_s else None,
+                )
+            except Exception as exc:  # noqa: BLE001
+                st.warning(f"No pude separar locutores automáticamente: {exc}")
+                speakers = []
+            # Always keep the start/end (or default) crop as a manual fallback sample.
+            try:
+                manual = comfyui_director.extract_voice_reference(
+                    audio_source,
+                    work_dir / "speakers" / "recorte_manual.wav",
+                    max_seconds=duration_s,
+                    start_seconds=start_clip,
+                )
+                speakers.append(
+                    director_characters.SpeakerCandidate(
+                        speaker_id="recorte",
+                        wav_path=str(manual),
+                        count=1,
+                        duration=0.0,
+                        segments=[],
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                if not speakers:
+                    st.warning(f"No pude recortar una muestra de voz: {exc}")
+        mapping = director_characters.map_faces_to_speakers(faces, speakers)
+        st.session_state["director_cast_faces"] = [
+            {
+                "cluster_id": face.cluster_id,
+                "count": face.count,
+                "crop_path": face.crop_path,
+                "thumb_path": face.thumb_path,
+                "extra_paths": face.extra_paths,
+                "name": f"Persona {face.cluster_id}",
+                "speaker_id": mapping.get(face.cluster_id, ""),
+            }
+            for face in faces
+        ]
+        st.session_state["director_cast_speakers"] = [
+            {
+                "speaker_id": speaker.speaker_id,
+                "wav_path": speaker.wav_path,
+                "count": speaker.count,
+            }
+            for speaker in speakers
+        ]
+        st.session_state["director_cast_source"] = source_url or str(source)
+        if video_path and not keep_video and source_url:
+            try:
+                Path(video_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+    n_faces = len(st.session_state.get("director_cast_faces") or [])
+    n_spk = len(st.session_state.get("director_cast_speakers") or [])
+    if n_faces == 0 and n_spk == 0:
+        raise comfyui_director.DirectorError(
+            "No encontré caras ni locutores en ese material."
+        )
+    st.success(
+        f"Encontré {n_faces} persona(s) y {n_spk} muestra(s) de voz. "
+        "Ponéles un nombre y guardalas en el catálogo."
+    )
+
+
+def _render_cast_draft() -> None:
+    faces = st.session_state.get("director_cast_faces") or []
+    speakers = st.session_state.get("director_cast_speakers") or []
+    if not faces and not speakers:
+        return
+    st.markdown("**🎬 Personas detectadas**")
+    speaker_options = [""] + [item["speaker_id"] for item in speakers]
+    speaker_labels = {"": "(sin voz)"}
+    for item in speakers:
+        speaker_labels[item["speaker_id"]] = (
+            f"Locutor {item['speaker_id']}"
+            if item["speaker_id"] != "recorte"
+            else "Recorte manual (inicio/fin)"
+        )
+    if speakers:
+        st.caption("Escuchá las muestras y, si hace falta, asigná una a cada persona.")
+        cols = st.columns(min(4, len(speakers)))
+        for index, speaker in enumerate(speakers):
+            with cols[index % len(cols)]:
+                st.caption(speaker_labels.get(speaker["speaker_id"], speaker["speaker_id"]))
+                if Path(speaker["wav_path"]).is_file():
+                    st.audio(speaker["wav_path"])
+
+    source = str(st.session_state.get("director_cast_source") or "")
+    if not faces and speakers:
+        st.caption("No hubo caras, pero sí audio. Podés guardar un personaje solo con voz.")
+        name = st.text_input("🎬 Nombre", key="director_voice_only_name", value="Personaje")
+        choice = st.selectbox(
+            "🎬 Muestra de voz",
+            options=[item["speaker_id"] for item in speakers],
+            format_func=lambda key: speaker_labels.get(key, key),
+            key="director_voice_only_spk",
+        )
+        if st.button("🎬 Guardar personaje (solo voz)", key="director_save_voice_only"):
+            wav = next((item["wav_path"] for item in speakers if item["speaker_id"] == choice), "")
+            # A 1x1 placeholder is not useful; require a later face. Allow voice-only.
+            try:
+                work = director_characters.characters_dir() / "_inbox"
+                # Use a tiny solid image? Better reject without face for PuLID.
+                st.warning("Para PuLID hace falta una cara. Subí también una foto o un video con el rostro.")
+            except Exception as exc:
+                st.error(str(exc))
+        return
+
+    for face in faces:
+        cluster = face["cluster_id"]
+        cols = st.columns([1, 2, 2])
+        with cols[0]:
+            if Path(face["thumb_path"]).is_file():
+                st.image(face["thumb_path"])
+            st.caption(f"{face['count']} tomas")
+        with cols[1]:
+            face["name"] = st.text_input(
+                "🎬 Nombre",
+                value=face.get("name") or f"Persona {cluster}",
+                key=f"director_cast_name_{cluster}",
+            )
+        with cols[2]:
+            default_index = 0
+            if face.get("speaker_id") in speaker_options:
+                default_index = speaker_options.index(face["speaker_id"])
+            chosen = st.selectbox(
+                "🎬 Voz",
+                options=speaker_options,
+                index=default_index,
+                format_func=lambda key: speaker_labels.get(key, key or "(sin voz)"),
+                key=f"director_cast_voice_{cluster}",
+            )
+            face["speaker_id"] = chosen
+        if st.button(f"🎬 Guardar {face.get('name') or cluster} en el catálogo", key=f"director_save_char_{cluster}"):
+            try:
+                wav = ""
+                if face.get("speaker_id"):
+                    wav = next(
+                        (
+                            item["wav_path"]
+                            for item in speakers
+                            if item["speaker_id"] == face["speaker_id"]
+                        ),
+                        "",
+                    )
+                char = director_characters.save_character(
+                    name=face.get("name") or f"Persona {cluster}",
+                    face_path=face["crop_path"],
+                    voice_path=wav or None,
+                    source=source,
+                    extra_faces=face.get("extra_paths") or [],
+                )
+                st.success(f"Guardé a {char.name} en bibles/characters/{char.slug}/")
+            except Exception as exc:  # noqa: BLE001
+                st.error(str(exc))
+
+
+def _render_character_catalog() -> None:
+    characters = director_characters.list_characters()
+    st.markdown("**🎬 Catálogo**")
+    if not characters:
+        st.caption("El catálogo está vacío.")
+        return
+    cols = st.columns(min(4, len(characters)))
+    for index, char in enumerate(characters):
+        with cols[index % len(cols)]:
+            if char.thumb():
+                st.image(char.thumb())
+            st.markdown(f"**{char.name}**")
+            st.caption(char.slug)
+            if char.voice_ref and Path(char.voice_ref).is_file():
+                st.audio(char.voice_ref)
+            else:
+                st.caption("Sin voz")
+            new_name = st.text_input(
+                "Renombrar",
+                value=char.name,
+                key=f"director_rename_{char.slug}",
+                label_visibility="collapsed",
+            )
+            b1, b2 = st.columns(2)
+            if b1.button("🎬 Renombrar", key=f"director_do_rename_{char.slug}"):
+                try:
+                    director_characters.rename_character(char.slug, new_name)
+                    st.rerun()
+                except Exception as exc:  # noqa: BLE001
+                    st.error(str(exc))
+            if b2.button("🎬 Borrar", key=f"director_do_delete_{char.slug}"):
+                try:
+                    director_characters.delete_character(char.slug)
+                    st.rerun()
+                except Exception as exc:  # noqa: BLE001
+                    st.error(str(exc))

@@ -9783,6 +9783,25 @@ def _render_application():
     if restore_applied or restore_succeeded:
         st.success(tr("Task Configuration Loaded"))
 
+    st.markdown(
+        '<div class="director-fork-marker director-main-tabs"></div>',
+        unsafe_allow_html=True,
+    )
+    st.caption("Nuevo (fork director)")
+    tab_generate, tab_characters, tab_scenes, tab_improve = st.tabs(
+        ["🎬 Generar video", "🎬 Personajes", "🎬 Escenas", "🎬 Mejorar"]
+    )
+    with tab_characters:
+        director_panel.render_characters()
+    with tab_scenes:
+        director_panel.render_placeholder_scenes()
+    with tab_improve:
+        director_panel.render_placeholder_improve()
+    with tab_generate:
+        _render_generate_video_tab()
+
+
+def _render_generate_video_tab():
     with st.container(key="main_settings_grid"):
         panel = st.columns(4)
     left_panel = panel[0]

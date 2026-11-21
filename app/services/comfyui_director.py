@@ -72,6 +72,7 @@ def comfyui_settings() -> dict[str, Any]:
     section.setdefault("bible_llm_model", OLLAMA_BIBLE_MODEL)
     section.setdefault("prompt_llm_provider", "ollama")
     section.setdefault("prompt_llm_model", OLLAMA_PROMPT_MODEL)
+    section.setdefault("protagonists", "")
     return section
 
 
@@ -594,12 +595,20 @@ def generate_script_and_terms(
     app_config=None,
 ) -> tuple[str, list[str]]:
     from app.services import llm
+    from app.services import director_characters
+
+    protagonists = director_characters.protagonists_from_settings()
+    extra_script = ""
+    if len(protagonists) >= 2:
+        extra_script = director_characters.dialogue_script_instruction(
+            protagonists, paragraph_number
+        )
 
     script_prompt = llm.build_script_prompt(
         video_subject=video_subject,
         language=language,
         paragraph_number=paragraph_number,
-        video_script_prompt=video_script_prompt,
+        video_script_prompt=(video_script_prompt or "") + extra_script,
         custom_system_prompt=custom_system_prompt,
     )
     script, _, _ = complete_text(
@@ -623,6 +632,10 @@ def generate_script_and_terms(
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"director terms failed, continuing without them: {exc}")
         terms = []
+    if len(protagonists) >= 2:
+        dialogue_terms = director_characters.terms_from_dialogue(script, protagonists)
+        if dialogue_terms:
+            terms = dialogue_terms
     unload_ollama_models()
     return script, terms
 
@@ -1010,6 +1023,11 @@ def download_videos_on_demand(
     save_dir = material_directory or utils.task_dir(task_id)
     Path(save_dir).mkdir(parents=True, exist_ok=True)
     chain = bool(settings.get("chain_scenes", True))
+    from app.services import director_characters
+
+    protagonists = director_characters.protagonists_from_settings(settings)
+    if len(protagonists) == 1:
+        bible = director_characters.apply_character_to_bible(bible, protagonists[0])
     previous_frame: str | None = bible.get("reference_image") or None
     if previous_frame and not Path(previous_frame).is_file():
         logger.warning(f"bible reference image is missing, first scene will be text-only: {previous_frame}")
@@ -1036,17 +1054,33 @@ def download_videos_on_demand(
             )
         unload_ollama_models()
 
+        previous_character = None
         for index, (scene, prompt) in enumerate(zip(scenes, prompts), start=1):
             output = Path(save_dir) / f"comfyui_{task_id}_{index:02d}.mp4"
+            scene_char = (
+                director_characters.character_for_scene(scene, index, protagonists)
+                if protagonists
+                else None
+            )
+            scene_face = face_ref
+            if scene_char and scene_char.face_ref and Path(scene_char.face_ref).is_file():
+                scene_face = scene_char.face_ref
+                bible = director_characters.apply_character_to_bible(bible, scene_char)
             first_frame = previous_frame if (chain or index == 1) else None
+            if (
+                scene_char
+                and previous_character
+                and scene_char.slug != previous_character
+            ):
+                first_frame = None
             chain_broken = index > 1 and not first_frame
-            if face_ref and (index == 1 or chain_broken):
+            if scene_face and (index == 1 or chain_broken):
                 from app.services.director_face import generate_pulid_first_frame
 
                 pulid_path = Path(save_dir) / f"comfyui_{task_id}_{index:02d}_pulid.png"
                 first_frame = str(
                     generate_pulid_first_frame(
-                        face_path=face_ref,
+                        face_path=scene_face,
                         output_path=pulid_path,
                         bible=bible,
                         scene=scene,
@@ -1077,6 +1111,7 @@ def download_videos_on_demand(
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"failed to record comfyui source: {exc}")
+            previous_character = scene_char.slug if scene_char else None
             if chain:
                 frame_path = Path(save_dir) / f"comfyui_{task_id}_{index:02d}_last.png"
                 try:

@@ -50,3 +50,5 @@ htmlcov/
 bibles/voices/
 # Face clone crops (director fork)
 bibles/faces/
+# Character catalog (director fork)
+bibles/characters/

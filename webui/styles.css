@@ -515,3 +515,10 @@ div[data-testid="stVerticalBlock"]:has(> div > div .director-fork-marker) {
 .director-fork-marker {
     display: none;
 }
+
+/* Big top-level director tabs */
+.director-main-tabs + div [data-baseweb="tab"] p,
+div[data-testid="stVerticalBlock"]:has(.director-main-tabs) [data-baseweb="tab"] p {
+    font-size: 1.15rem !important;
+    font-weight: 700 !important;
+}

@@ -5,10 +5,11 @@ Esta rama agrega una fuente de video **🎬 ComfyUI MiniMax (fork director)** a 
 ## Cómo usarlo
 
 1. Levantá ComfyUI (en esta máquina suele estar en `http://127.0.0.1:8188`) y el WebUI: `cd ~/Videos/MoneyPrinterTurbo && sh webui.sh`.
-2. En **Fuente de video** elegí **🎬 ComfyUI MiniMax (fork director)**. La sección nueva está marcada con el ícono 🎬 y un borde violeta, y dice *Nuevo (fork director)*.
-3. Completá o generá una biblia (`bibles/example.toml` es la plantilla). El botón **🎬 Generar biblia con IA** toma la idea/estrategia y guarda un archivo editable en `bibles/`.
-4. Dejá encendido **🎬 Encadenar escenas** para que el último fotograma de un clip sea el primer fotograma del siguiente (modo first-frame de MiniMax H3).
-5. Generá el video como siempre. MoneyPrinterTurbo pone voz, subtítulos y música; ComfyUI solo fabrica los clips.
+2. Arriba hay pestañas grandes: **🎬 Generar video**, **🎬 Personajes**, **🎬 Escenas** y **🎬 Mejorar** (estas dos últimas todavía son un placeholder). Están marcadas con 🎬, borde violeta y *Nuevo (fork director)*.
+3. En **Fuente de video** elegí **🎬 ComfyUI MiniMax (fork director)**.
+4. Completá o generá una biblia (`bibles/example.toml` es la plantilla). El botón **🎬 Generar biblia con IA** toma la idea/estrategia y guarda un archivo editable en `bibles/`.
+5. Dejá encendido **🎬 Encadenar escenas** para que el último fotograma de un clip sea el primer fotograma del siguiente (modo first-frame de MiniMax H3).
+6. Generá el video como siempre. MoneyPrinterTurbo pone voz, subtítulos y música; ComfyUI solo fabrica los clips.
 
 ## Biblia
 
@@ -70,16 +71,18 @@ Sección `[comfyui]` en `config.toml` (url, ruta de workflow API opcional, timeo
 - Cada clip se genera por separado. El encadenado por último fotograma ayuda, pero no reemplaza un LoRA de personaje.
 - MoneyPrinterTurbo sigue armando el video final con esos clips, más voz y subtítulos.
 
-## Clonar voz (Chatterbox)
+## Catálogo de personajes
 
-Chatterbox Multilingual (español) corre en un venv aparte (`~/Videos/chatterbox/.venv`) y un servidor local en `http://127.0.0.1:4123`.
+En la pestaña **🎬 Personajes**:
 
-1. En la sección violeta **🎬 Clonar personaje**, leé la nota de consentimiento.
-2. Subí un video, un audio o una foto, o pegá una URL de YouTube (u otro sitio que soporte yt-dlp). Opcional: inicio y fin en segundos.
-3. Pulsá **🎬 Extraer voz y caras**. La muestra de voz queda en `bibles/voices/` y en la biblia (`[character] voice_ref`).
-4. En Audio, elegí **Chatterbox TTS** y **🎬 Chatterbox (voz clonada)**.
+1. Leé la nota de consentimiento. Subí un video, una foto o pegá una URL (inicio y fin opcionales).
+2. Pulsá **🎬 Detectar personas**. InsightFace agrupa una miniatura por persona. Si hay audio, un diarizado liviano (CAM++ ONNX, ~29 MB, sin token de Hugging Face) arma una muestra por locutor y trata de asignarla a la cara según quién está en cuadro. Si no alcanza, queda el recorte manual inicio/fin y podés asignar la voz a mano, con previa.
+3. Ponéle un nombre a cada persona y guardala. Cada una vive en `bibles/characters/<slug>/` con un `character.toml` (nombre, `face_ref`, `voice_ref`, fecha, origen). El catálogo se ve como una grilla de íconos; se puede renombrar o borrar.
+4. En **🎬 Generar video**, con la fuente ComfyUI, elegí **🎬 Protagonistas**. Con uno, se usan su cara (PuLID) y su voz (Chatterbox). Con dos o más, el guion va en réplicas `Nombre:` y se alternan planos y voces. No hay dos caras en el mismo cuadro ni lip-sync.
 
-Solo usá voces de personas que te hayan dado consentimiento. Si en el material hablan varias personas, recortá inicio y fin a un tramo donde hable solo quien querés clonar (no hay diarización).
+Chatterbox Multilingual (español) sigue en un venv aparte (`~/Videos/chatterbox/.venv`) y un servidor local en `http://127.0.0.1:4123`. Si elegís protagonistas, el WebUI selecciona **🎬 Chatterbox (voz clonada)**. También podés seguir usando `voice_ref` / `face_ref` en la biblia si no hay protagonistas.
+
+Solo usá voces y caras de personas que te hayan dado consentimiento.
 
 Arranque manual del servidor: `sh ~/Videos/MoneyPrinterTurbo/scripts/chatterbox_serve.sh`. MoneyPrinterTurbo lo levanta solo si no está en marcha. Tras un rato inactivo libera la GPU (`/free`, keep_alive 120 s) para no pelear con MiniMax H3.
 
@@ -97,4 +100,4 @@ PuLID no puede condicionar MiniMax H3 directamente. El camino práctico en 12 GB
 
 Nodos: `~/Videos/ComfyUI/custom_nodes/PuLID_ComfyUI` (cubiq). Modelos: `models/pulid/ip-adapter_pulid_sdxl_fp16.safetensors`, `models/checkpoints/sdxl_lightning_4step.safetensors`, `models/insightface/models/antelopev2/`. EVA-CLIP se descarga solo la primera vez.
 
-No hace falta una sola persona en todo el video: el selector muestra una cara por persona. Sí conviene que, para la voz, el recorte de tiempo tenga un solo hablante.
+No hace falta una sola persona en todo el video: el catálogo muestra una cara por persona. El diarizado intenta emparejar locutor y cara; si no, asignás la muestra a mano o recortás inicio/fin a un solo hablante.

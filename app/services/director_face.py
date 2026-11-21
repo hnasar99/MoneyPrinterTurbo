@@ -60,6 +60,7 @@ class FaceCandidate:
     thumb_path: str
     score: float
     extra_paths: list[str] = field(default_factory=list)
+    times: list[float] = field(default_factory=list)
 
 
 def _face_analyzer():
@@ -81,7 +82,7 @@ def _iter_sample_frames(source: Path, max_frames: int = 24):
         image = cv2.imread(str(source))
         if image is None:
             raise DirectorError(f"No pude leer la imagen: {source}")
-        yield 0, image
+        yield 0, 0.0, image
         return
     capture = cv2.VideoCapture(str(source))
     if not capture.isOpened():
@@ -97,7 +98,7 @@ def _iter_sample_frames(source: Path, max_frames: int = 24):
                 if not ok:
                     break
                 if index % max(1, int(fps // 2) or 1) == 0:
-                    yield index, frame
+                    yield index, index / fps, frame
                     kept += 1
                 index += 1
             return
@@ -111,7 +112,7 @@ def _iter_sample_frames(source: Path, max_frames: int = 24):
             capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
             ok, frame = capture.read()
             if ok and frame is not None:
-                yield frame_index, frame
+                yield frame_index, float(t), frame
     finally:
         capture.release()
 
@@ -138,7 +139,7 @@ def extract_face_candidates(source: str | Path, dest_dir: str | Path | None = No
     dest.mkdir(parents=True, exist_ok=True)
     analyzer = _face_analyzer()
     detections: list[dict[str, Any]] = []
-    for frame_index, frame in _iter_sample_frames(src):
+    for frame_index, time_sec, frame in _iter_sample_frames(src):
         faces = analyzer.get(frame) or []
         for face in faces:
             bbox = getattr(face, "bbox", None)
@@ -156,6 +157,7 @@ def extract_face_candidates(source: str | Path, dest_dir: str | Path | None = No
                     "crop": crop,
                     "score": score,
                     "frame": frame_index,
+                    "time": float(time_sec),
                 }
             )
     if not detections:
@@ -201,6 +203,7 @@ def extract_face_candidates(source: str | Path, dest_dir: str | Path | None = No
                 thumb_path=str(thumb_path.resolve()),
                 score=float(best["score"]),
                 extra_paths=extras,
+                times=[float(item.get("time") or 0.0) for item in cluster],
             )
         )
     logger.info(f"grouped {len(detections)} face detections into {len(candidates)} people from {src}")
