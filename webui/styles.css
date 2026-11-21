@@ -501,3 +501,17 @@ div[class*="st-key-task_row_"] button[kind="secondary"] p {
         min-width: 1.75rem !important;
     }
 }
+
+
+/* director fork (rama director) */
+div[data-testid="stVerticalBlock"]:has(> div .director-fork-marker),
+div[data-testid="stVerticalBlock"]:has(> div > div .director-fork-marker) {
+    border: 2px solid #8B5CF6;
+    border-radius: 12px;
+    padding: 0.75rem 1rem 0.4rem 1rem;
+    margin: 0.35rem 0 0.8rem 0;
+    background: rgba(139, 92, 246, 0.06);
+}
+.director-fork-marker {
+    display: none;
+}

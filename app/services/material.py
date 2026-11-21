@@ -29,6 +29,7 @@ from app.models.schema import ImageMotion, MaterialInfo, VideoAspect, VideoConca
 from app.services import (
     aigei,
     codex_image,
+    comfyui_director,
     generation_progress,
     infistar_video,
     jalapeno_video,
@@ -2645,6 +2646,15 @@ def download_videos(
     elif material_directory and not os.path.isdir(material_directory):
         material_directory = ""
 
+    if source == "comfyui":
+        return comfyui_director.download_videos_on_demand(
+            task_id=task_id,
+            search_terms=search_terms,
+            video_aspect=video_aspect,
+            audio_duration=audio_duration,
+            max_clip_duration=max_clip_duration,
+            material_directory=material_directory,
+        )
     if source == "infistar":
         return _download_videos_infistar_on_demand(
             task_id=task_id, search_terms=search_terms, video_aspect=video_aspect,

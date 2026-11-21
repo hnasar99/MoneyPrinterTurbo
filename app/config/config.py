@@ -680,6 +680,9 @@ chatterbox = _SynchronizedConfig(_cfg.get("chatterbox", {}))
 kokoro = _SynchronizedConfig(_cfg.get("kokoro", {}))
 fish_audio = _SynchronizedConfig(_cfg.get("fish_audio", {}))
 voxcpm = _SynchronizedConfig(_cfg.get("voxcpm", {}))
+if "comfyui" not in _cfg:
+    _cfg["comfyui"] = {}
+comfyui = _SynchronizedConfig(_cfg["comfyui"])
 ui = _SynchronizedConfig(
     _cfg.get(
         "ui",

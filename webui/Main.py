@@ -50,6 +50,7 @@ from app.services import material_upload as material_upload_service
 from app.services import (
     aigei,
     cache_manager,
+    comfyui_director,
     llm,
     loomloom,
     material,
@@ -65,6 +66,7 @@ from app.services import (
     voice,
     webui_task,
 )
+from webui import director_panel
 from app.services import elevenlabs_music as elevenlabs_music_service
 from app.services import sonilo as sonilo_service
 from app.services import state as sm
@@ -148,6 +150,7 @@ VIDEO_SOURCE_GROUPS = {
         "wavespeed",
         "muapi",
         "useapi",
+        "comfyui",
     ),
     "ai_image": ("openai_image", "codex_image", "useapi_image"),
     "local": ("local",),
@@ -263,6 +266,7 @@ _RUNTIME_CONFIG_SECTIONS = {
     "siliconflow": config.siliconflow,
     "fish_audio": config.fish_audio,
     "voxcpm": config.voxcpm,
+    "comfyui": config.comfyui,
     "ui": config.ui,
 }
 # 设置预设与密钥备份使用各自的文件标识。导入时先校验 schema 和版本，
@@ -3438,6 +3442,7 @@ def _material_provider_labels():
         "wavespeed": tr("WaveSpeed AI Video"),
         "muapi": tr("MuAPI AI Video"),
         "useapi": tr("useapi.net AI Video"),
+        "comfyui": "🎬 ComfyUI MiniMax (fork director)",
         "openai_image": tr("OpenAI Compatible Text-to-Image"),
         "codex_image": tr("codex.image.label"),
         "useapi_image": tr("useapi.net Nano Banana Images"),
@@ -5577,6 +5582,16 @@ def _render_local_script_generation(params):
     with st.spinner(tr("Generating Video Script and Keywords")):
 
         def generate_script_and_terms(app_config_snapshot):
+            if params.video_source == "comfyui":
+                return comfyui_director.generate_script_and_terms(
+                    video_subject=params.video_subject,
+                    language=params.video_language,
+                    paragraph_number=params.paragraph_number,
+                    video_script_prompt=params.video_script_prompt,
+                    custom_system_prompt=params.custom_system_prompt,
+                    match_script_order=params.match_materials_to_script,
+                    app_config=app_config_snapshot,
+                )
             script = llm.generate_script(
                 video_subject=params.video_subject,
                 language=params.video_language,
@@ -6218,6 +6233,8 @@ def _render_video_settings(panel, params):
                 st.caption(tr("MuAPI AI Video Help"))
             if params.video_source == "useapi":
                 st.caption(tr("useapi.net AI Video Help"))
+            if params.video_source == "comfyui":
+                director_panel.render(params)
             if params.video_source == "useapi_image":
                 st.caption(tr("useapi.net Nano Banana Images Help"))
             if params.video_source == "local":
@@ -9321,6 +9338,13 @@ def _render_generation_controls(
             _remove_active_generation_task(task_id)
             st.error(tr("Please Select a Valid Video Source"))
             st.stop()
+
+        if params.video_source == "comfyui":
+            comfyui_error = comfyui_director.validate_ready()
+            if comfyui_error:
+                _remove_active_generation_task(task_id)
+                st.error(comfyui_error)
+                st.stop()
 
         if params.video_source == "pexels" and not config.app.get(
             "pexels_api_keys", ""

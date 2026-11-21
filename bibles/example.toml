@@ -1,0 +1,39 @@
+# Biblia de video — fork director de MoneyPrinterTurbo
+#
+# Escribí este archivo UNA vez por proyecto. Cada escena lo respeta:
+# lo único que debería cambiar de un clip a otro es la acción, no el aspecto.
+# Las descripciones visuales conviene dejarlas en inglés (MiniMax H3 responde mejor).
+
+title = "Ejemplo"
+# Idea o estrategia del video (contexto para el LLM al completar la biblia)
+strategy = "Video corto, tono cercano, un solo personaje y una sola paleta de color."
+
+[character]
+name = "Alex"
+# Descripción fija: se copia igual en cada pedido a ComfyUI.
+description = "A 30-year-old Latin American man, short dark curly hair, light stubble, olive skin, wearing a rust-colored linen overshirt and a simple silver chain."
+# Ruta opcional a una foto de referencia (se usa como primer fotograma de la primera escena).
+reference_image = ""
+
+[style]
+# Esta frase se pega idéntica en todos los prompts.
+sentence = "35 mm film, warm sunset light, amber and teal palette, soft grain, natural skin texture, cinematic color grade"
+
+[camera]
+# Reglas fijas de cámara y planos permitidos.
+rules = "35 mm lens, slow camera moves, no jump cuts across the axis. Allowed shots: wide, medium, close-up."
+
+[generation]
+# MiniMax H3 no tiene campo de negative prompt: se agrega al final del pedido como "Avoid: ...".
+negative_prompt = "watermark, logo, subtitles, extra fingers, deformed face, sudden costume change, different identity, jitter, morphing"
+# Misma semilla en todas las escenas, para sostener el look.
+seed = 12345
+# Resolución baja de arranque, pensada para una RTX 3060 12 GB. Múltiplos de 32.
+# Vertical 9:16: invertí width y height (por ejemplo 352 x 640).
+width = 640
+height = 352
+# Duración de cada clip en segundos (recomendado 3 a 5 en esta máquina).
+clip_seconds = 3
+# 8 pasos con el LoRA turbo oficial; sin LoRA el flujo usa 20 pasos y pesa más.
+steps = 8
+use_turbo_lora = true
