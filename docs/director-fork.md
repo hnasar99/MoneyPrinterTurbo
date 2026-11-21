@@ -72,15 +72,29 @@ Sección `[comfyui]` en `config.toml` (url, ruta de workflow API opcional, timeo
 
 ## Clonar voz (Chatterbox)
 
-Etapa 1 del clon de personaje. Chatterbox Multilingual (español) corre en un venv aparte (`~/Videos/chatterbox/.venv`) y un servidor local en `http://127.0.0.1:4123`.
+Chatterbox Multilingual (español) corre en un venv aparte (`~/Videos/chatterbox/.venv`) y un servidor local en `http://127.0.0.1:4123`.
 
 1. En la sección violeta **🎬 Clonar personaje**, leé la nota de consentimiento.
-2. Subí un video/audio, o pegá una URL de YouTube (u otro sitio que soporte yt-dlp). Opcional: inicio y fin en segundos, y guardar también el video (hasta 720p) para el clon de cara después.
-3. Pulsá **🎬 Extraer voz de referencia**. La muestra queda en `bibles/voices/` y en la biblia (`[character] voice_ref`).
+2. Subí un video, un audio o una foto, o pegá una URL de YouTube (u otro sitio que soporte yt-dlp). Opcional: inicio y fin en segundos.
+3. Pulsá **🎬 Extraer voz y caras**. La muestra de voz queda en `bibles/voices/` y en la biblia (`[character] voice_ref`).
 4. En Audio, elegí **Chatterbox TTS** y **🎬 Chatterbox (voz clonada)**.
 
-Solo usá voces de personas que te hayan dado consentimiento.
+Solo usá voces de personas que te hayan dado consentimiento. Si en el material hablan varias personas, recortá inicio y fin a un tramo donde hable solo quien querés clonar (no hay diarización).
 
 Arranque manual del servidor: `sh ~/Videos/MoneyPrinterTurbo/scripts/chatterbox_serve.sh`. MoneyPrinterTurbo lo levanta solo si no está en marcha. Tras un rato inactivo libera la GPU (`/free`, keep_alive 120 s) para no pelear con MiniMax H3.
 
 Los subtítulos de esta voz usan el recorte del texto sobre la duración del audio (como ElevenLabs). Para un ajuste más fino, `subtitle_provider = "whisper"`.
+
+## Clonar cara (PuLID)
+
+PuLID no puede condicionar MiniMax H3 directamente. El camino práctico en 12 GB de VRAM es:
+
+1. El mismo flujo de **🎬 Extraer voz y caras** muestrea fotogramas (o usa la foto), detecta caras con InsightFace (AntelopeV2) y agrupa por persona.
+2. Si hay más de una persona, elegí la miniatura. El recorte queda en `bibles/faces/` y en la biblia (`[character] face_ref`).
+3. Al generar, si `face_ref` está definido, ComfyUI fabrica el primer fotograma con PuLID sobre **SDXL Lightning de 4 pasos** (`sdxl_lightning_4step.safetensors`) a resolución modesta (lado largo 768, múltiplo de 64). InsightFace corre en CPU para ahorrar VRAM.
+4. Ese still entra como first-frame del clip MiniMax H3. En escenas siguientes se reusa el último fotograma de la cadena. Si la cadena se corta (o está apagada), se vuelve a generar un still con PuLID.
+5. Entre PuLID y MiniMax el fork hace `POST /free` para no dejar los pesos de SDXL ocupando la GPU.
+
+Nodos: `~/Videos/ComfyUI/custom_nodes/PuLID_ComfyUI` (cubiq). Modelos: `models/pulid/ip-adapter_pulid_sdxl_fp16.safetensors`, `models/checkpoints/sdxl_lightning_4step.safetensors`, `models/insightface/models/antelopev2/`. EVA-CLIP se descarga solo la primera vez.
+
+No hace falta una sola persona en todo el video: el selector muestra una cara por persona. Sí conviene que, para la voz, el recorte de tiempo tenga un solo hablante.

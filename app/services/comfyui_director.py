@@ -136,6 +136,13 @@ def _normalize_bible(data: dict[str, Any], source: Path | None = None) -> dict[s
             base = source.parent if source else repo_root()
             voice_path = base / voice_path
         voice_ref = str(voice_path)
+    face_ref = str(character.get("face_ref") or "").strip()
+    if face_ref:
+        face_path = Path(face_ref).expanduser()
+        if not face_path.is_absolute():
+            base = source.parent if source else repo_root()
+            face_path = base / face_path
+        face_ref = str(face_path)
     width = _as_int(generation.get("width"), 640)
     height = _as_int(generation.get("height"), 352)
     width = max(32, min(16384, width - (width % 32)))
@@ -152,6 +159,7 @@ def _normalize_bible(data: dict[str, Any], source: Path | None = None) -> dict[s
         "character": str(character.get("description") or "").strip(),
         "reference_image": reference,
         "voice_ref": voice_ref,
+        "face_ref": face_ref,
         "style": str(style.get("sentence") or "").strip(),
         "camera": str(camera.get("rules") or "").strip(),
         "negative_prompt": str(generation.get("negative_prompt") or "").strip(),
@@ -192,6 +200,7 @@ name = "{esc(str(bible.get("character_name") or ""))}"
 description = \"\"\"{esc(str(bible.get("character") or ""))}\"\"\"
 reference_image = "{esc(reference)}"
 voice_ref = "{esc(str(bible.get("voice_ref") or ""))}"
+face_ref = "{esc(str(bible.get("face_ref") or ""))}"
 
 [style]
 sentence = \"\"\"{esc(str(bible.get("style") or ""))}\"\"\"
@@ -1005,6 +1014,10 @@ def download_videos_on_demand(
     if previous_frame and not Path(previous_frame).is_file():
         logger.warning(f"bible reference image is missing, first scene will be text-only: {previous_frame}")
         previous_frame = None
+    face_ref = str(bible.get("face_ref") or "").strip()
+    if face_ref and not Path(face_ref).is_file():
+        logger.warning(f"bible face_ref is missing, clips will not use PuLID: {face_ref}")
+        face_ref = ""
 
     total = 0.0
     scenes = [str(term).strip() for term in search_terms if str(term).strip()]
@@ -1026,6 +1039,19 @@ def download_videos_on_demand(
         for index, (scene, prompt) in enumerate(zip(scenes, prompts), start=1):
             output = Path(save_dir) / f"comfyui_{task_id}_{index:02d}.mp4"
             first_frame = previous_frame if (chain or index == 1) else None
+            chain_broken = index > 1 and not first_frame
+            if face_ref and (index == 1 or chain_broken):
+                from app.services.director_face import generate_pulid_first_frame
+
+                pulid_path = Path(save_dir) / f"comfyui_{task_id}_{index:02d}_pulid.png"
+                first_frame = str(
+                    generate_pulid_first_frame(
+                        face_path=face_ref,
+                        output_path=pulid_path,
+                        bible=bible,
+                        scene=scene,
+                    )
+                )
             saved, duration = submit_minimax_clip(
                 prompt=prompt,
                 bible=bible,
@@ -1053,7 +1079,13 @@ def download_videos_on_demand(
                 logger.warning(f"failed to record comfyui source: {exc}")
             if chain:
                 frame_path = Path(save_dir) / f"comfyui_{task_id}_{index:02d}_last.png"
-                previous_frame = str(extract_last_frame(str(saved), frame_path))
+                try:
+                    previous_frame = str(extract_last_frame(str(saved), frame_path))
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"last-frame extract failed, next clip will reopen the face: {exc}")
+                    previous_frame = None
+            else:
+                previous_frame = None
             total += min(float(bible["clip_seconds"]), duration)
             if total >= required:
                 break

@@ -48,3 +48,5 @@ htmlcov/
 
 # Voice clone samples (director fork)
 bibles/voices/
+# Face clone crops (director fork)
+bibles/faces/
