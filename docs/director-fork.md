@@ -69,3 +69,18 @@ Sección `[comfyui]` en `config.toml` (url, ruta de workflow API opcional, timeo
 - MiniMax H3 es pesado para 16 GB de RAM y 12 GB de VRAM. El default de la plantilla es 640×352, 3 s y 8 pasos con LoRA turbo. Si aparece OOM, bajá resolución o duración; no conviene tener ComfyUI y Ollama cargados juntos.
 - Cada clip se genera por separado. El encadenado por último fotograma ayuda, pero no reemplaza un LoRA de personaje.
 - MoneyPrinterTurbo sigue armando el video final con esos clips, más voz y subtítulos.
+
+## Clonar voz (Chatterbox)
+
+Etapa 1 del clon de personaje. Chatterbox Multilingual (español) corre en un venv aparte (`~/Videos/chatterbox/.venv`) y un servidor local en `http://127.0.0.1:4123`.
+
+1. En la sección violeta **🎬 Clonar personaje**, leé la nota de consentimiento.
+2. Subí un video/audio, o pegá una URL de YouTube (u otro sitio que soporte yt-dlp). Opcional: inicio y fin en segundos, y guardar también el video (hasta 720p) para el clon de cara después.
+3. Pulsá **🎬 Extraer voz de referencia**. La muestra queda en `bibles/voices/` y en la biblia (`[character] voice_ref`).
+4. En Audio, elegí **Chatterbox TTS** y **🎬 Chatterbox (voz clonada)**.
+
+Solo usá voces de personas que te hayan dado consentimiento.
+
+Arranque manual del servidor: `sh ~/Videos/MoneyPrinterTurbo/scripts/chatterbox_serve.sh`. MoneyPrinterTurbo lo levanta solo si no está en marcha. Tras un rato inactivo libera la GPU (`/free`, keep_alive 120 s) para no pelear con MiniMax H3.
+
+Los subtítulos de esta voz usan el recorte del texto sobre la duración del audio (como ElevenLabs). Para un ajuste más fino, `subtitle_provider = "whisper"`.

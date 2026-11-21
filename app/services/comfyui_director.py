@@ -129,6 +129,13 @@ def _normalize_bible(data: dict[str, Any], source: Path | None = None) -> dict[s
             base = source.parent if source else repo_root()
             ref_path = base / ref_path
         reference = str(ref_path)
+    voice_ref = str(character.get("voice_ref") or "").strip()
+    if voice_ref:
+        voice_path = Path(voice_ref).expanduser()
+        if not voice_path.is_absolute():
+            base = source.parent if source else repo_root()
+            voice_path = base / voice_path
+        voice_ref = str(voice_path)
     width = _as_int(generation.get("width"), 640)
     height = _as_int(generation.get("height"), 352)
     width = max(32, min(16384, width - (width % 32)))
@@ -144,6 +151,7 @@ def _normalize_bible(data: dict[str, Any], source: Path | None = None) -> dict[s
         "character_name": str(character.get("name") or "").strip(),
         "character": str(character.get("description") or "").strip(),
         "reference_image": reference,
+        "voice_ref": voice_ref,
         "style": str(style.get("sentence") or "").strip(),
         "camera": str(camera.get("rules") or "").strip(),
         "negative_prompt": str(generation.get("negative_prompt") or "").strip(),
@@ -183,6 +191,7 @@ strategy = \"\"\"{esc(str(bible.get("strategy") or ""))}\"\"\"
 name = "{esc(str(bible.get("character_name") or ""))}"
 description = \"\"\"{esc(str(bible.get("character") or ""))}\"\"\"
 reference_image = "{esc(reference)}"
+voice_ref = "{esc(str(bible.get("voice_ref") or ""))}"
 
 [style]
 sentence = \"\"\"{esc(str(bible.get("style") or ""))}\"\"\"
@@ -489,7 +498,7 @@ Fill every field from the user's idea/strategy. Keep visual descriptions in Engl
 title may be in Spanish. strategy should restate the idea clearly (Spanish is OK).
 Use clip_seconds between 3 and 5, width/height multiples of 32, prefer 640x352 landscape
 or 352x640 portrait for a 12 GB GPU. steps=8 and use_turbo_lora=true.
-reference_image should stay empty unless the user named a file path.
+reference_image and voice_ref should stay empty unless the user named a file path.
 Leave seed as a positive integer.
 
 User idea/strategy:
@@ -895,6 +904,7 @@ def submit_minimax_clip(
             first_image_name=first_name,
         )
     unload_ollama_models()
+    unload_chatterbox()
     started = time.time()
     response = requests.post(
         f"{base}/prompt",
@@ -1052,3 +1062,243 @@ def download_videos_on_demand(
         unload_ollama_models()
     logger.success(f"generated {len(video_paths)} ComfyUI clips")
     return video_paths
+
+
+CLONED_VOICE_NAME = "chatterbox:cloned-Female"
+CHATTERBOX_URL_DEFAULT = "http://127.0.0.1:4123"
+CHATTERBOX_VOICE_REF_POINTER = Path.home() / "Videos/chatterbox/voice_ref.txt"
+CHATTERBOX_SERVE_SCRIPT = repo_root() / "scripts" / "chatterbox_serve.sh"
+
+
+def voices_dir() -> Path:
+    path = bibles_dir() / "voices"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def set_active_voice_ref(path: str | Path) -> Path:
+    resolved = Path(path).expanduser().resolve()
+    CHATTERBOX_VOICE_REF_POINTER.parent.mkdir(parents=True, exist_ok=True)
+    CHATTERBOX_VOICE_REF_POINTER.write_text(str(resolved), encoding="utf-8")
+    return resolved
+
+
+def current_voice_ref(bible: dict | None = None) -> str:
+    if bible and bible.get("voice_ref") and Path(str(bible["voice_ref"])).is_file():
+        return str(Path(bible["voice_ref"]).expanduser())
+    try:
+        loaded = load_bible()
+        if loaded.get("voice_ref") and Path(loaded["voice_ref"]).is_file():
+            return str(loaded["voice_ref"])
+    except Exception:
+        pass
+    if CHATTERBOX_VOICE_REF_POINTER.is_file():
+        raw = CHATTERBOX_VOICE_REF_POINTER.read_text(encoding="utf-8").strip()
+        if raw and Path(raw).is_file():
+            return raw
+    return ""
+
+
+def extract_voice_reference(
+    source: str | Path,
+    destination: str | Path | None = None,
+    *,
+    max_seconds: float = 25.0,
+    start_seconds: float = 0.5,
+) -> Path:
+    """Extract a clean mono voice sample with ffmpeg (no Demucs)."""
+    src = Path(source).expanduser()
+    if not src.is_file():
+        raise DirectorError(f"No encuentro el archivo de voz: {src}")
+    if destination is None:
+        slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", src.stem.lower()).strip("-") or "voz"
+        destination = voices_dir() / f"{slug}.wav"
+    dest = Path(destination)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    # Trim leading/trailing silence and cap at ~10-30 seconds, mono 16 kHz.
+    filt = (
+        "silenceremove=start_periods=1:start_silence=0.25:start_threshold=-40dB:"
+        "detection=peak,"
+        "areverse,"
+        "silenceremove=start_periods=1:start_silence=0.25:start_threshold=-40dB:"
+        "detection=peak,"
+        "areverse"
+    )
+    command = [
+        "ffmpeg",
+        "-y",
+        "-ss",
+        str(max(0.0, float(start_seconds))),
+        "-i",
+        str(src),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-af",
+        filt,
+        "-t",
+        str(max(10.0, min(30.0, float(max_seconds)))),
+        str(dest),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0 or not dest.is_file() or dest.stat().st_size < 1000:
+        # Retry without silenceremove in case the filter failed on this ffmpeg build.
+        command = [
+            "ffmpeg", "-y", "-ss", "0.3", "-i", str(src),
+            "-vn", "-ac", "1", "-ar", "16000",
+            "-t", str(max(10.0, min(30.0, float(max_seconds)))),
+            str(dest),
+        ]
+        result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0 or not dest.is_file() or dest.stat().st_size < 1000:
+        raise DirectorError(
+            "No pude extraer el audio de referencia con ffmpeg: "
+            + (result.stderr or result.stdout or "")[-400:]
+        )
+    set_active_voice_ref(dest)
+    return dest
+
+
+def save_voice_ref_in_bible(voice_path: str | Path, bible_path: str | Path | None = None) -> Path:
+    path = resolve_bible_path(str(bible_path) if bible_path else None)
+    bible = load_bible(path)
+    bible["voice_ref"] = str(Path(voice_path).expanduser().resolve())
+    set_active_voice_ref(bible["voice_ref"])
+    return save_bible(path, bible)
+
+
+def unload_chatterbox() -> None:
+    url = str(config.chatterbox.get("base_url") or CHATTERBOX_URL_DEFAULT).rstrip("/")
+    if url.endswith("/v1"):
+        url = url[:-3]
+    try:
+        response = requests.post(f"{url}/free", timeout=10)
+        if response.status_code >= 400:
+            logger.warning(f"Chatterbox /free returned HTTP {response.status_code}")
+        else:
+            logger.info("freed Chatterbox GPU memory")
+    except requests.RequestException as exc:
+        logger.debug(f"chatterbox /free skipped: {exc}")
+
+
+def ensure_chatterbox_server(timeout: float = 20.0) -> str:
+    """Start the local Chatterbox server if it is down. Returns the base URL without /v1."""
+    raw = str(config.chatterbox.get("base_url") or "http://127.0.0.1:4123/v1").strip().rstrip("/")
+    health_base = raw[:-3] if raw.endswith("/v1") else raw
+    try:
+        response = requests.get(f"{health_base}/health", timeout=2)
+        if response.ok:
+            return health_base
+    except requests.RequestException:
+        pass
+    script = CHATTERBOX_SERVE_SCRIPT
+    if not script.is_file():
+        raise DirectorError(f"No encuentro el script de Chatterbox: {script}")
+    log_path = Path.home() / "Videos/chatterbox/server.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_handle = open(log_path, "ab")
+    subprocess.Popen(
+        ["sh", str(script)],
+        stdout=log_handle,
+        stderr=log_handle,
+        start_new_session=True,
+        cwd=str(Path.home() / "Videos/chatterbox"),
+    )
+    deadline = time.time() + timeout
+    last_error = "timeout"
+    while time.time() < deadline:
+        try:
+            response = requests.get(f"{health_base}/health", timeout=2)
+            if response.ok:
+                logger.info(f"Chatterbox server ready at {health_base}")
+                return health_base
+            last_error = f"HTTP {response.status_code}"
+        except requests.RequestException as exc:
+            last_error = str(exc)
+        time.sleep(0.5)
+    raise DirectorError(
+        f"No pude levantar el servidor de Chatterbox en {health_base}: {last_error}. "
+        f"Revisá {log_path}"
+    )
+
+
+def _parse_clip_window(start_seconds: float | None, end_seconds: float | None) -> tuple[float, float]:
+    start = max(0.0, float(start_seconds or 0.0))
+    end = float(end_seconds or 0.0)
+    if end > start:
+        duration = min(30.0, max(3.0, end - start))
+    else:
+        duration = 25.0
+    return start, duration
+
+
+def download_source_from_url(
+    url: str,
+    dest_dir: str | Path | None = None,
+    *,
+    save_video: bool = False,
+) -> tuple[Path, Path | None]:
+    """Download audio (and optionally a modest video) with yt-dlp."""
+    try:
+        import yt_dlp
+    except ImportError as exc:
+        raise DirectorError(
+            "Falta yt-dlp en el entorno de MoneyPrinterTurbo. "
+            "Instalálo con: uv pip install --python .venv/bin/python yt-dlp"
+        ) from exc
+
+    source = (url or "").strip()
+    if not re.match(r"https?://", source, flags=re.I):
+        raise DirectorError("Pegá una URL válida (YouTube u otro sitio que soporte yt-dlp).")
+
+    dest = Path(dest_dir) if dest_dir else voices_dir() / "descarga"
+    dest.mkdir(parents=True, exist_ok=True)
+
+    def _run(opts: dict) -> Path:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(source, download=True)
+            prepared = Path(ydl.prepare_filename(info))
+        if prepared.is_file():
+            return prepared
+        # prepare_filename may not match after format merge; take newest file in dest.
+        files = [path for path in dest.iterdir() if path.is_file()]
+        if not files:
+            raise DirectorError("yt-dlp terminó sin dejar un archivo.")
+        return max(files, key=lambda path: path.stat().st_mtime)
+
+    common = {
+        "noplaylist": True,
+        "quiet": True,
+        "noprogress": True,
+        "overwrites": True,
+        "no_warnings": True,
+        "restrictfilenames": True,
+    }
+    audio_opts = {
+        **common,
+        "format": "bestaudio/best",
+        "outtmpl": str(dest / "source_audio.%(ext)s"),
+    }
+    try:
+        audio_path = _run(audio_opts)
+    except Exception as exc:
+        raise DirectorError(f"No pude descargar el audio: {exc}") from exc
+
+    video_path = None
+    if save_video:
+        video_opts = {
+            **common,
+            "format": "bv*[height<=720]+ba/b[height<=720]/b",
+            "merge_output_format": "mp4",
+            "outtmpl": str(dest / "source_video.%(ext)s"),
+        }
+        try:
+            video_path = _run(video_opts)
+        except Exception as exc:
+            logger.warning(f"optional video download failed: {exc}")
+            video_path = None
+    return audio_path, video_path
+
+

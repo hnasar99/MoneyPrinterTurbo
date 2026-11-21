@@ -287,6 +287,9 @@ def get_chatterbox_voices() -> list[str]:
     if not result:
         # keep the dropdown usable even before any voice is configured
         result = ["chatterbox:default-Female"]
+    cloned = "chatterbox:cloned-Female"
+    if cloned not in result:
+        result.insert(0, cloned)
     return result
 
 
@@ -2481,7 +2484,7 @@ def minimax_tts(text: str, voice_id: str, voice_rate: float, voice_file: str, vo
         try:
             logger.info(f"start MiniMax TTS, model: {model}, voice: {voice_id}, try: {attempt + 1}")
             response = trace_http_call(
-                "POST", requests.post, url, json=payload, headers=headers, allow_redirects=False, timeout=120)
+                "POST", requests.post, url, json=payload, headers=headers, allow_redirects=False, timeout=request_timeout)
             if 300 <= response.status_code < 400:
                 # Redirecting a speech POST may replay a billed synthesis or
                 # forward its input/credentials. Do not follow or resubmit it.
@@ -2723,6 +2726,8 @@ def _openai_compatible_tts(
     text: str,
     voice_rate: float,
     voice_file: str,
+    extra: dict | None = None,
+    timeout: float | None = None,
 ) -> Union[SubMaker, None]:
     """Shared transport for self-hosted, OpenAI-compatible ``/audio/speech``
     servers (Chatterbox, Kokoro, ...).
@@ -2744,6 +2749,9 @@ def _openai_compatible_tts(
         # 1.0-centred multiplier, so it maps directly (clamped to the valid range).
         "speed": max(0.25, min(4.0, float(voice_rate or 1.0))),
     }
+    if extra:
+        payload.update(extra)
+    request_timeout = timeout if timeout is not None else 120
     # OpenAI speech 协议没有音量字段；最终混音阶段应用 voice_volume。
     # speed 仅调节语速，不能作为音量参数使用。
 
@@ -2755,7 +2763,7 @@ def _openai_compatible_tts(
             ensure_file_path_exists(voice_file)
 
             response = trace_http_call(
-                "POST", requests.post, url, json=payload, headers=headers, allow_redirects=False, timeout=120)
+                "POST", requests.post, url, json=payload, headers=headers, allow_redirects=False, timeout=request_timeout)
             if 300 <= response.status_code < 400:
                 # Redirecting a speech POST may replay a billed synthesis or
                 # forward its input/credentials. Do not follow or resubmit it.
@@ -2863,8 +2871,34 @@ def chatterbox_tts(
     if not model_id:
         model_id = config.chatterbox.get("model_id", "chatterbox") or "chatterbox"
 
+    extra = {"language": "es"}
+    try:
+        from app.services import comfyui_director
+
+        comfyui_director.free_comfyui_memory()
+        comfyui_director.unload_ollama_models()
+        comfyui_director.ensure_chatterbox_server()
+        if (voice or "").lower() in {"cloned", "clonada"} or "cloned" in (voice or "").lower():
+            ref = comfyui_director.current_voice_ref()
+            if not ref:
+                logger.error("Chatterbox cloned voice needs a bible voice_ref sample")
+                return None
+            extra["audio_prompt_path"] = ref
+            extra["voice"] = "cloned"
+    except Exception as exc:
+        logger.warning(f"could not prepare Chatterbox director server: {exc}")
+
     return _openai_compatible_tts(
-        "chatterbox", base_url, api_key, model_id, voice, text, voice_rate, voice_file
+        "chatterbox",
+        base_url,
+        api_key,
+        model_id,
+        voice,
+        text,
+        voice_rate,
+        voice_file,
+        extra=extra,
+        timeout=300,
     )
 
 

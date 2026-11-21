@@ -14,6 +14,8 @@ name = "Alex"
 description = "A 30-year-old Latin American man, short dark curly hair, light stubble, olive skin, wearing a rust-colored linen overshirt and a simple silver chain."
 # Ruta opcional a una foto de referencia (se usa como primer fotograma de la primera escena).
 reference_image = ""
+# Muestra de voz (wav/mp3), 10-30 s, de alguien que te dio consentimiento.
+voice_ref = ""
 
 [style]
 # Esta frase se pega idéntica en todos los prompts.

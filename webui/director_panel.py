@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+import tempfile
 from pathlib import Path
 
 import streamlit as st
@@ -202,3 +204,93 @@ def render(params) -> None:
         "Ollama local → NVIDIA free → OpenRouter free → el proveedor que ya tengas configurado "
         "(OpenRouter, Ollama u OpenAI-compatible, por ejemplo MiniMax)."
     )
+
+    st.markdown("**🎬 Clonar personaje**")
+    st.caption(
+        "Solo usá voces de personas que te hayan dado consentimiento. "
+        "Subí un video o un audio, o pegá una URL de YouTube (u otro sitio que soporte yt-dlp). "
+        "Extraigo un recorte mono de 10 a 25 segundos con ffmpeg."
+    )
+    uploaded_voice = st.file_uploader(
+        "🎬 Video o audio para clonar la voz",
+        type=["wav", "mp3", "m4a", "flac", "ogg", "mp4", "mkv", "webm", "mov"],
+        key="director_voice_uploader",
+    )
+    voice_url = st.text_input(
+        "🎬 URL de YouTube u otro video",
+        key="director_voice_url",
+        placeholder="https://www.youtube.com/watch?v=...",
+        help="Se descarga el audio con yt-dlp. Podés marcar también el video para el clon de cara después.",
+    )
+    start_col, end_col, video_col = st.columns(3)
+    voice_start = start_col.number_input(
+        "🎬 Inicio (s)",
+        min_value=0.0,
+        value=0.0,
+        step=1.0,
+        key="director_voice_start",
+        help="Segundo desde el que cortar la muestra.",
+    )
+    voice_end = end_col.number_input(
+        "🎬 Fin (s)",
+        min_value=0.0,
+        value=0.0,
+        step=1.0,
+        key="director_voice_end",
+        help="0 = tomar unos 25 s desde el inicio indicado.",
+    )
+    save_source_video = video_col.checkbox(
+        "🎬 Guardar también el video (para el clon de cara)",
+        key="director_save_source_video",
+        help="Opcional. Baja un video de hasta 720p a la carpeta del personaje.",
+    )
+    if st.button("🎬 Extraer voz de referencia", key="director_extract_voice"):
+        if uploaded_voice is None and not str(voice_url or "").strip():
+            st.error("Subí un archivo o pegá una URL de YouTube (u otro video).")
+        else:
+            try:
+                start_s, duration_s = comfyui_director._parse_clip_window(
+                    voice_start, voice_end
+                )
+                slug = re.sub(
+                    r"[^a-zA-Z0-9_-]+",
+                    "-",
+                    (Path(str(settings.get("bible") or "personaje")).stem or "personaje").lower(),
+                ).strip("-") or "personaje"
+                dest_dir = comfyui_director.voices_dir() / slug
+                with st.spinner("Preparando la muestra de voz..."):
+                    if str(voice_url or "").strip():
+                        source, video_path = comfyui_director.download_source_from_url(
+                            voice_url,
+                            dest_dir,
+                            save_video=bool(save_source_video),
+                        )
+                    else:
+                        suffix = Path(uploaded_voice.name or "voz.wav").suffix or ".wav"
+                        dest_dir.mkdir(parents=True, exist_ok=True)
+                        source = dest_dir / f"upload{suffix}"
+                        source.write_bytes(uploaded_voice.getbuffer())
+                        video_path = None
+                    dest = comfyui_director.extract_voice_reference(
+                        source,
+                        dest_dir / "voice_ref.wav",
+                        max_seconds=duration_s,
+                        start_seconds=start_s,
+                    )
+                    comfyui_director.save_voice_ref_in_bible(dest, bible_rel)
+                st.session_state["tts_server_select"] = "chatterbox"
+                st.session_state["speech_synthesis_select_chatterbox"] = (
+                    comfyui_director.CLONED_VOICE_NAME
+                )
+                extra = f" Video guardado en {video_path}." if video_path else ""
+                st.success(
+                    f"Guardé la referencia en {dest}.{extra} "
+                    "En Audio quedó seleccionada 🎬 Chatterbox (voz clonada)."
+                )
+                st.audio(str(dest))
+            except Exception as exc:
+                st.error(str(exc))
+    existing = comfyui_director.current_voice_ref()
+    if existing and Path(existing).is_file():
+        st.caption(f"Referencia actual: {existing}")
+        st.audio(existing)

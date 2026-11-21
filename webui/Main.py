@@ -8361,7 +8361,10 @@ def _render_audio_settings(panel, params):
                     return parts[2] if len(parts) >= 3 else v
                 if voice.is_chatterbox_voice(v) or voice.is_kokoro_voice(v):
                     name = v.split(":", 1)[1] if ":" in v else v
-                    return name.replace("-Female", "").replace("-Male", "")
+                    name = name.replace("-Female", "").replace("-Male", "")
+                    if voice.is_chatterbox_voice(v) and name.lower() == "cloned":
+                        return "🎬 Chatterbox (voz clonada)"
+                    return name
                 if voice.is_minimax_voice(v):
                     return minimax_voice_labels.get(v, v.split(":", 1)[1])
                 if voice.is_fish_audio_voice(v):
