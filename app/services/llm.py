@@ -239,6 +239,14 @@ def _extract_chat_completion_text(response, llm_provider: str) -> str:
         raise ValueError(f"[{llm_provider}] returned empty message")
 
     content = getattr(message, "content", None)
+    if not (isinstance(content, str) and content.strip()):
+        # Qwen3 / reasoning models often put the visible answer in a thinking
+        # field and leave content empty (or only a <think> block).
+        for attr in ("reasoning_content", "reasoning", "thinking"):
+            alt = getattr(message, attr, None)
+            if isinstance(alt, str) and alt.strip():
+                content = alt
+                break
     return _normalize_text_response(content, llm_provider)
 
 
@@ -790,9 +798,17 @@ def _generate_response(
                 getattr(response, "output_text", None), llm_provider
             )
 
+        create_kwargs = {
+            "model": model_name,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if llm_provider == "ollama":
+            # Qwen3 and similar reasoning models otherwise return only a thinking
+            # channel; after <think> stripping, script/terms come back empty.
+            create_kwargs["extra_body"] = {"think": False}
         response = trace_sdk_call(
             llm_provider, base_url, client.chat.completions.create,
-            model=model_name, messages=[{"role": "user", "content": prompt}]
+            **create_kwargs,
         )
         if response:
             if isinstance(response, ChatCompletion):

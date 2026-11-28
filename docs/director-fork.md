@@ -114,6 +114,10 @@ En **🎬 Generar video**, con un protagonista elegido, el interruptor **🎬 Li
 
 El venv usa Python 3.10, torch 2.0.1+cu118, mmcv 2.0.1 y mmpose 1.1.0, con `--version v15 --use_float16 --batch_size 4`. Dejá `setuptools==70.3.0`: desde setuptools 82 ya no está `pkg_resources` y mmpose no arranca. Los pesos viven en `~/Videos/musetalk/models` (no se commitean).
 
+## Errores al generar
+
+Si falta un dato o algo no encaja (Ollama caído, ComfyUI en :8188 apagado, Chatterbox sin muestra, lip-sync sin protagonista, Pexels sin API key, guion vacío, etc.), **Generar video** no arranca: aparece un resumen arriba y el campo queda con borde rojo y una explicación en castellano. Si el fallo ocurre a mitad de la generación, se marca el mismo campo en vez de mostrar un traceback.
+
 ## Voces cuando el diarizado parte de más
 
 Si hay una sola cara, las muestras de locutor se unen en una. Si igual aparecen varias, podés marcar **🎬 Usar todas como una sola voz** (concatena las muestras A, B, C…) o elegir:

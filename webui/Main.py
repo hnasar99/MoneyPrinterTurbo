@@ -67,6 +67,7 @@ from app.services import (
     webui_task,
 )
 from webui import director_panel
+from webui import generate_preflight
 from app.services import elevenlabs_music as elevenlabs_music_service
 from app.services import sonilo as sonilo_service
 from app.services import state as sm
@@ -2159,8 +2160,17 @@ def _render_generation_task_snapshot(task_id, task):
             error = tr(error_key)
             if request_id := error_params.get("request_id"):
                 error += f" ({tr('Aigei Request ID')} {request_id})"
-        message = tr("Video Generation Failed")
-        st.error(f"{message}: {error}" if error else message)
+        mapped = generate_preflight.remember_runtime_failure(
+            error, stage=task.get("failed_stage")
+        )
+        if mapped:
+            message = mapped[0]["message"]
+            st.error(message)
+        else:
+            message = tr("Video Generation Failed")
+            # Keep the backend reason, but never dump a stack trace in the UI.
+            brief = error.split("Traceback", 1)[0].strip()
+            st.error(f"{message}: {brief}" if brief else message)
         activity = task.get("generation_activity") or {}
         if activity.get("remote_id"):
             st.warning(tr("Generation Existing Task Hint").format(task_id=activity["remote_id"]))
@@ -4580,6 +4590,7 @@ def _render_settings_dialog():
                         lambda value: value,
                     ),
                 )
+                generate_preflight.field_caption("llm")
                 # 配置表单和 Provider 说明并排展示，减少长说明在窄列中的换行，
                 # 同时充分利用基础设置面板的横向空间。
                 llm_form_panel, llm_help_panel = st.columns(
@@ -5620,17 +5631,29 @@ def _render_local_script_generation(params):
         # return "" or [] when the model fails. A generated script may itself
         # quote "Error: ", so only an empty result is a failure.
         if not script:
-            st.error(tr("Video Script Generation Failed"))
+            generate_preflight.set_errors(
+                generate_preflight.map_runtime_error(
+                    "failed to generate video script"
+                )
+            )
+            st.rerun()
         else:
             st.session_state["video_script"] = script
             st.session_state["video_terms"] = ", ".join(terms)
+            if terms:
+                generate_preflight.clear_errors()
             st.session_state["loomloom_video_scene_autofill_digest"] = (
                 hashlib.sha256(script.strip().encode("utf-8")).hexdigest()
             )
             if not terms:
                 # The generated script is kept; blank keywords are generated
                 # from it when the video is made.
-                st.error(tr("Video Keywords Generation Failed"))
+                generate_preflight.set_errors(
+                    generate_preflight.map_runtime_error(
+                        "failed to generate video search terms: empty text content"
+                    )
+                )
+                st.rerun()
 
 
 def _render_loomloom_candidates():
@@ -5970,6 +5993,7 @@ def _render_script_settings(panel, params):
                     key="video_subject",
                     label_visibility="collapsed",
                 ).strip()
+                generate_preflight.field_caption("video_subject")
 
             video_languages = [
                 (tr("Auto Detect"), ""),
@@ -6094,6 +6118,7 @@ def _render_script_settings(panel, params):
                 height=180,
                 key="video_script",
             )
+            generate_preflight.field_caption("video_script")
             video_source = st.session_state.get(
                 localized_widget_key("video_source_select"),
                 config.snapshot_config_with_pending(config.app).get("video_source"),
@@ -6132,8 +6157,14 @@ def _render_script_settings(panel, params):
                             ),
                         )
                         if not terms:
-                            st.error(tr("Video Keywords Generation Failed"))
+                            generate_preflight.set_errors(
+                                generate_preflight.map_runtime_error(
+                                    "failed to generate video search terms: empty text content"
+                                )
+                            )
+                            st.rerun()
                         else:
+                            generate_preflight.clear_errors()
                             st.session_state["video_terms"] = ", ".join(terms)
 
             params.video_terms = st.text_area(
@@ -6141,6 +6172,8 @@ def _render_script_settings(panel, params):
                 help=tr("Aigei Video Keywords Help" if is_aigei else "Video Keywords Help"),
                 key="video_terms",
             )
+            generate_preflight.field_caption("video_terms")
+            generate_preflight.field_caption("llm")
 
 
 def _render_video_settings(panel, params):
@@ -6171,6 +6204,7 @@ def _render_video_settings(panel, params):
                 settings_label=tr("Configure Material Sources"),
                 on_settings=_open_material_settings_dialog,
             )
+            generate_preflight.field_caption("video_source")
             _set_runtime_config("app", "video_source", params.video_source)
 
             if params.video_source == "aigei":
@@ -8282,6 +8316,7 @@ def _render_audio_settings(panel, params):
                 selected_tts_server = saved_tts_server
 
             _set_runtime_config("ui", "tts_server", selected_tts_server)
+            generate_preflight.field_caption("voice")
 
             # 服务说明紧跟 Provider 选择，先告诉用户需要准备什么，再进入音色和
             # 凭证配置。没有说明的 Provider 不渲染空提示块。
@@ -8434,6 +8469,7 @@ def _render_audio_settings(panel, params):
                     # Provider 维持原选择器行为，不扩大本次修改的影响范围。
                     accept_new_options=selected_tts_server == "minimax-tts",
                 )
+                generate_preflight.field_caption("voice")
 
                 if selected_tts_server == "minimax-tts":
                     custom_voice_id = str(voice_name or "").strip()
@@ -9299,6 +9335,16 @@ def _render_generation_controls(
     render_onboarding_tour()
     if start_button:
         _save_runtime_config()
+        preflight_errors = generate_preflight.validate_generation(
+            params, voice_mode=voice_mode
+        )
+        if preflight_errors:
+            pending = st.session_state.get("pending_generation_task_id")
+            if pending:
+                _remove_active_generation_task(pending)
+            generate_preflight.set_errors(preflight_errors)
+            st.rerun()
+        generate_preflight.clear_errors()
         task_id = st.session_state.get("pending_generation_task_id") or str(uuid4())
         _add_active_generation_task(
             task_id,
@@ -9802,6 +9848,8 @@ def _render_application():
 
 
 def _render_generate_video_tab():
+    generate_preflight.inject_styles()
+    generate_preflight.render_summary()
     with st.container(key="main_settings_grid"):
         panel = st.columns(4)
     left_panel = panel[0]

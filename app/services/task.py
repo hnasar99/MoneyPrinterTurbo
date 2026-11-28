@@ -414,7 +414,7 @@ def generate_terms(task_id, params, video_script):
         _mark_task_failed(
             task_id,
             "terms",
-            "failed to generate video search terms",
+            "failed to generate video search terms: the LLM returned empty text",
         )
         return None
 
@@ -1864,7 +1864,7 @@ def _run_pipeline(
             return _mark_task_failed(
                 task_id,
                 "terms",
-                "failed to generate video search terms",
+                "failed to generate video search terms: the LLM returned empty text",
             )
 
     save_script_data(task_id, video_script, video_terms, params)

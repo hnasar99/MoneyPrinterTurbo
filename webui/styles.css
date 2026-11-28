@@ -522,3 +522,23 @@ div[data-testid="stVerticalBlock"]:has(.director-main-tabs) [data-baseweb="tab"]
     font-size: 1.15rem !important;
     font-weight: 700 !important;
 }
+
+
+/* Field errors when Generate is blocked or a run fails */
+.director-preflight-summary {
+    border: 2px solid #DC2626;
+    background: #FEF2F2;
+    color: #7F1D1D;
+    border-radius: 12px;
+    padding: 0.8rem 1rem 0.5rem 1rem;
+    margin: 0 0 0.9rem 0;
+}
+.director-preflight-summary ul {
+    margin: 0.35rem 0 0.2rem 1.1rem;
+    padding: 0;
+}
+.director-field-error-msg {
+    color: #B91C1C !important;
+    font-size: 0.9rem;
+    margin: 0.15rem 0 0.45rem 0;
+}

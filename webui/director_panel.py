@@ -8,6 +8,8 @@ from pathlib import Path
 
 import streamlit as st
 
+from webui import generate_preflight
+
 from app.config import config
 from app.services import comfyui_director, director_characters, director_face
 
@@ -55,6 +57,7 @@ def render(params) -> None:
         key="director_bible_select",
         help="Plantilla de estilo y continuidad que se aplica a todas las escenas.",
     )
+    generate_preflight.field_caption("bible")
     bible_rel = f"bibles/{selected_bible}"
     _persist("bible", bible_rel)
 
@@ -256,6 +259,7 @@ def render(params) -> None:
                     "Varios protagonistas: el guion va en réplicas `Nombre:` y cada "
                     "escena muestra a una sola persona, alternando."
                 )
+        generate_preflight.field_caption("protagonists")
         # Lip-sync defaults to on when there is a protagonist (Chatterbox voice).
         if selected and not st.session_state.get("director_lip_sync_touched"):
             st.session_state["director_lip_sync"] = True
@@ -272,6 +276,7 @@ def render(params) -> None:
             on_change=lambda: st.session_state.update({"director_lip_sync_touched": True}),
         )
         _persist("lip_sync", bool(lip_sync))
+        generate_preflight.field_caption("lip_sync")
 
     has_selection = bool(str(settings.get("protagonists") or "").strip())
     existing = comfyui_director.current_voice_ref()
