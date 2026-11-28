@@ -26,7 +26,7 @@ from app.services.comfyui_director import (
 
 LOCAL_TZ = ZoneInfo("America/Buenos_Aires")
 SPEAKER_MODEL = repo_root() / "models" / "speaker" / "campplus_sv_en_voxceleb_16k.onnx"
-SIMILARITY_THRESHOLD = 0.55
+SIMILARITY_THRESHOLD = 0.40
 DIALOGUE_LINE = re.compile(
     r"^\s*(?:\[(?P<bracket>[^\]]+)\]|(?P<name>[^:]{1,40}))\s*:\s*(?P<text>.+?)\s*$"
 )
@@ -405,6 +405,7 @@ def diarize_speakers(
     start_seconds: float = 0.0,
     duration_seconds: float | None = None,
     max_speakers: int = 6,
+    face_count: int | None = None,
 ) -> list[SpeakerCandidate]:
     """Cluster speaker embeddings (CAM++ ONNX) over energy-VAD segments."""
     src = Path(source)
@@ -451,6 +452,28 @@ def diarize_speakers(
         if not assigned:
             clusters.append([item])
     clusters.sort(key=len, reverse=True)
+    # One face on screen almost always means one speaker; merge leftovers.
+    if face_count == 1 and len(clusters) > 1:
+        dominant = clusters[0]
+        for extra in clusters[1:]:
+            dominant.extend(extra)
+        clusters = [dominant]
+    else:
+        # Merge tiny leftover clusters into the closest larger one.
+        if len(clusters) > 1:
+            merged = [clusters[0]]
+            for extra in clusters[1:]:
+                if len(extra) <= 2 and len(merged[0]) >= 3:
+                    # attach to the most similar already-accepted cluster
+                    best = max(
+                        merged,
+                        key=lambda cluster: _cosine(extra[0]["embedding"], cluster[0]["embedding"]),
+                    )
+                    if _cosine(extra[0]["embedding"], best[0]["embedding"]) >= 0.30:
+                        best.extend(extra)
+                        continue
+                merged.append(extra)
+            clusters = merged
     clusters = clusters[: max(1, max_speakers)]
     speakers: list[SpeakerCandidate] = []
     for index, cluster in enumerate(clusters, start=1):
@@ -597,10 +620,12 @@ def tts_dialogue(
         return None
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    temp_dir = output.parent / f"dialogue_{uuid.uuid4().hex[:8]}"
+    temp_dir = output.parent / "dialogue_lines"
     temp_dir.mkdir(parents=True, exist_ok=True)
     parts: list[Path] = []
     spoken: list[str] = []
+    segments: list[dict] = []
+    cursor = 0.0
     try:
         for index, (name, text) in enumerate(lines, start=1):
             char = character_for_label(name, characters)
@@ -615,8 +640,20 @@ def tts_dialogue(
             )
             if sub is None or not part.is_file():
                 raise DirectorError(f"No pude sintetizar la réplica de {name}.")
+            duration = float(voice_service.get_audio_duration(str(part)) or 0.0)
             parts.append(part)
             spoken.append(text)
+            segments.append(
+                {
+                    "path": str(part),
+                    "start": cursor,
+                    "end": cursor + duration,
+                    "duration": duration,
+                    "name": name,
+                    "text": text,
+                }
+            )
+            cursor += duration
         concat_list = temp_dir / "concat.txt"
         concat_list.write_text(
             "".join(f"file '{part.resolve()}'\n" for part in parts),
@@ -663,11 +700,100 @@ def tts_dialogue(
         if result.returncode != 0 or not output.is_file():
             raise DirectorError("No pude unir las réplicas de voz: " + (result.stderr or "")[-300:])
         duration = voice_service.get_audio_duration(str(output))
+        try:
+            from app.services.director_lipsync import write_audio_segments
+
+            write_audio_segments(output.parent, segments)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"could not write audio segments: {exc}")
         sub_maker = voice_service.ensure_legacy_submaker_fields(voice_service.SubMaker())
         return voice_service.populate_legacy_submaker_with_full_text(
             sub_maker=sub_maker,
             text=" ".join(spoken),
             audio_duration_seconds=duration,
         )
-    finally:
+    except Exception:
         shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+
+def concat_audio_files(sources: list[str | Path], destination: str | Path) -> Path:
+    """Concatenate wav/mp3 samples into one voice_ref."""
+    dest = Path(destination)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    files = [Path(src) for src in sources if src and Path(src).is_file()]
+    if not files:
+        raise DirectorError("No hay muestras de voz para unir.")
+    if len(files) == 1:
+        if files[0].resolve() != dest.resolve():
+            shutil.copy2(files[0], dest)
+        return dest
+    list_file = dest.parent / f"{dest.stem}_concat.txt"
+    # Re-encode to wav first so mixed formats can be joined.
+    wavs = []
+    for index, src in enumerate(files, start=1):
+        wav = dest.parent / f"{dest.stem}_part{index:02d}.wav"
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-i", str(src), "-ac", "1", "-ar", "16000", str(wav)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and wav.is_file():
+            wavs.append(wav)
+    if not wavs:
+        raise DirectorError("No pude preparar las muestras para unirlas.")
+    list_file.write_text("".join(f"file '{w.resolve()}'\n" for w in wavs), encoding="utf-8")
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(list_file), str(dest)],
+        capture_output=True,
+        text=True,
+    )
+    for wav in wavs:
+        if wav.resolve() != dest.resolve():
+            wav.unlink(missing_ok=True)
+    list_file.unlink(missing_ok=True)
+    if result.returncode != 0 or not dest.is_file():
+        raise DirectorError("No pude unir las muestras de voz: " + (result.stderr or "")[-300:])
+    return dest
+
+
+def extract_full_voice_reference(
+    source: str | Path,
+    destination: str | Path,
+    *,
+    max_seconds: float = 60.0,
+) -> Path:
+    """Extract the whole spoken audio (silences trimmed), capped at max_seconds."""
+    src = Path(source)
+    dest = Path(destination)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    filt = (
+        "silenceremove=start_periods=1:start_silence=0.2:start_threshold=-40dB:"
+        "detection=peak,"
+        "areverse,"
+        "silenceremove=start_periods=1:start_silence=0.2:start_threshold=-40dB:"
+        "detection=peak,"
+        "areverse"
+    )
+    command = [
+        "ffmpeg", "-y", "-i", str(src),
+        "-vn", "-ac", "1", "-ar", "16000",
+        "-af", filt,
+        "-t", str(max(8.0, min(max_seconds, float(max_seconds)))),
+        str(dest),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0 or not dest.is_file() or dest.stat().st_size < 1000:
+        command = [
+            "ffmpeg", "-y", "-i", str(src),
+            "-vn", "-ac", "1", "-ar", "16000",
+            "-t", str(max(8.0, min(60.0, float(max_seconds)))),
+            str(dest),
+        ]
+        result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0 or not dest.is_file() or dest.stat().st_size < 1000:
+        raise DirectorError(
+            "No pude extraer el recorte total de audio: "
+            + (result.stderr or result.stdout or "")[-400:]
+        )
+    return dest
+

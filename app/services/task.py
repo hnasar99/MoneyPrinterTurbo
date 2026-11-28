@@ -1,5 +1,6 @@
 import json
 import math
+from pathlib import Path
 import os
 import socket
 import tempfile
@@ -662,6 +663,24 @@ def generate_audio(
         if audio_duration == 0:
             _mark_task_failed(task_id, "audio", "generated audio duration is zero")
             return None, None, None
+        try:
+            from app.services.director_lipsync import write_audio_segments
+
+            segments_path = Path(utils.task_dir(task_id)) / "audio_segments.json"
+            if not segments_path.is_file():
+                write_audio_segments(
+                    utils.task_dir(task_id),
+                    [
+                        {
+                            "path": audio_file,
+                            "start": 0.0,
+                            "end": float(file_duration or audio_duration),
+                            "duration": float(file_duration or audio_duration),
+                        }
+                    ],
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"could not write audio segments: {exc}")
         return audio_file, audio_duration, sub_maker
     else:
         logger.info(f"using custom audio file: {custom_audio_file}")
@@ -1112,6 +1131,19 @@ def generate_final_videos(
         # 每条视频占 50% 进度中的一份，合成与最终编码各占一半。片段处理是
         # 合成里最耗时的部分，逐段推进这一半的进度。
         combine_share = 50 / params.video_count / 2
+        lip_sync_on = False
+        try:
+            from app.services.comfyui_director import comfyui_settings
+
+            lip_sync_on = bool(
+                getattr(params, "video_source", "") == "comfyui"
+                and comfyui_settings().get("lip_sync", False)
+            )
+        except Exception:
+            lip_sync_on = False
+        if lip_sync_on:
+            # Use each lip-synced clip in full so the mouth stays aligned with the line.
+            video_concat_mode = VideoConcatMode.sequential
         video.combine_videos(
             combined_video_path=combined_video_path,
             video_paths=downloaded_videos,
@@ -1120,7 +1152,9 @@ def generate_final_videos(
             video_fit_mode=params.video_fit_mode,
             video_concat_mode=video_concat_mode,
             video_transition_mode=video_transition_mode,
-            max_clip_duration=params.video_clip_duration,
+            max_clip_duration=(
+                120 if lip_sync_on else params.video_clip_duration
+            ),
             threads=params.n_threads,
             clip_speed=params.video_clip_speed,
             progress_callback=_stage_progress_reporter(

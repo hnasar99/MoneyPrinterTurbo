@@ -73,6 +73,7 @@ def comfyui_settings() -> dict[str, Any]:
     section.setdefault("prompt_llm_provider", "ollama")
     section.setdefault("prompt_llm_model", OLLAMA_PROMPT_MODEL)
     section.setdefault("protagonists", "")
+    section.setdefault("lip_sync", True)
     return section
 
 
@@ -1127,6 +1128,24 @@ def download_videos_on_demand(
     finally:
         material_service._persist_material_sources(task_id, material_sources)
         unload_ollama_models()
+    if video_paths and bool(settings.get("lip_sync", True)) and (protagonists or bible.get("voice_ref")):
+        from app.services.director_lipsync import lipsync_clips
+
+        audio_path = Path(save_dir) / "audio.mp3"
+        if not audio_path.is_file():
+            # MPT sometimes writes the narration next to the task, not the material folder.
+            alt = Path(utils.task_dir(task_id)) / "audio.mp3"
+            if alt.is_file():
+                audio_path = alt
+        if audio_path.is_file():
+            logger.info(f"lip-sync {len(video_paths)} clips to {audio_path}")
+            video_paths = lipsync_clips(
+                video_paths,
+                audio_path=audio_path,
+                task_dir=save_dir,
+            )
+        else:
+            logger.warning(f"lip-sync skipped, no audio at {audio_path}")
     logger.success(f"generated {len(video_paths)} ComfyUI clips")
     return video_paths
 

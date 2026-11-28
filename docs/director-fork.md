@@ -101,3 +101,22 @@ PuLID no puede condicionar MiniMax H3 directamente. El camino práctico en 12 GB
 Nodos: `~/Videos/ComfyUI/custom_nodes/PuLID_ComfyUI` (cubiq). Modelos: `models/pulid/ip-adapter_pulid_sdxl_fp16.safetensors`, `models/checkpoints/sdxl_lightning_4step.safetensors`, `models/insightface/models/antelopev2/`. EVA-CLIP se descarga solo la primera vez.
 
 No hace falta una sola persona en todo el video: el catálogo muestra una cara por persona. El diarizado intenta emparejar locutor y cara; si no, asignás la muestra a mano o recortás inicio/fin a un solo hablante.
+
+## Lip-sync (MuseTalk 1.5)
+
+Después de que MiniMax renderiza cada clip, y antes de que MoneyPrinterTurbo los pegue, el fork puede sincronizar la boca con el audio de Chatterbox de esa escena.
+
+Se eligió **MuseTalk 1.5** (no LatentSync 1.6) porque entra cómodo en una RTX 3060 12 GB (~7.5 GB de VRAM en FP16). LatentSync 1.6 pide unos 18 GB a 512 px. MuseTalk recicla el clip en ida y vuelta si el audio es más largo, y el fork además alarga el video con un ping-pong para que la boca cubra toda la línea.
+
+Corre en un venv aparte (`~/Videos/musetalk/.venv`) y un servidor local en `http://127.0.0.1:4124`, igual que Chatterbox. El fork libera ComfyUI (`/free`), Chatterbox y Ollama antes de usarlo, y lo descarga al terminar.
+
+En **🎬 Generar video**, con un protagonista elegido, el interruptor **🎬 Lip-sync** queda encendido por defecto (se puede apagar). Arranque manual: `sh ~/Videos/MoneyPrinterTurbo/scripts/musetalk_serve.sh`.
+
+El venv usa Python 3.10, torch 2.0.1+cu118, mmcv 2.0.1 y mmpose 1.1.0, con `--version v15 --use_float16 --batch_size 4`. Dejá `setuptools==70.3.0`: desde setuptools 82 ya no está `pkg_resources` y mmpose no arranca. Los pesos viven en `~/Videos/musetalk/models` (no se commitean).
+
+## Voces cuando el diarizado parte de más
+
+Si hay una sola cara, las muestras de locutor se unen en una. Si igual aparecen varias, podés marcar **🎬 Usar todas como una sola voz** (concatena las muestras A, B, C…) o elegir:
+
+- **Recorte manual (solo el tramo inicio/fin que marcaste)**
+- **Recorte total del audio (todo el habla del video, hasta 60 s)**

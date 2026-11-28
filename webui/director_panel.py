@@ -213,6 +213,7 @@ def render(params) -> None:
             "🎬 Personajes y después elegilos acá."
         )
         _persist("protagonists", "")
+        _persist("lip_sync", False)
     else:
         labels = {char.slug: char.name for char in characters}
         saved = [
@@ -230,7 +231,7 @@ def render(params) -> None:
             help=(
                 "Opcional. Con uno, se usa su cara (PuLID) y su voz (Chatterbox). "
                 "Con dos o más, se alternan los planos y las réplicas (estilo diálogo). "
-                "No hay dos caras en el mismo cuadro ni lip-sync."
+                "No hay dos caras en el mismo cuadro. El lip-sync se aplica por escena."
             ),
         )
         _persist("protagonists", ",".join(selected))
@@ -255,6 +256,22 @@ def render(params) -> None:
                     "Varios protagonistas: el guion va en réplicas `Nombre:` y cada "
                     "escena muestra a una sola persona, alternando."
                 )
+        # Lip-sync defaults to on when there is a protagonist (Chatterbox voice).
+        if selected and not st.session_state.get("director_lip_sync_touched"):
+            st.session_state["director_lip_sync"] = True
+        lip_sync = st.checkbox(
+            "🎬 Lip-sync",
+            value=bool(st.session_state.get("director_lip_sync", bool(selected))),
+            key="director_lip_sync",
+            help=(
+                "Después de MiniMax, MuseTalk 1.5 sincroniza la boca con el audio "
+                "de Chatterbox de cada escena. Si el clip es más corto que la línea, "
+                "se alarga con un ping-pong (ida y vuelta). Se activa solo con "
+                "protagonista y voz clonada; podés apagarlo."
+            ),
+            on_change=lambda: st.session_state.update({"director_lip_sync_touched": True}),
+        )
+        _persist("lip_sync", bool(lip_sync))
 
     has_selection = bool(str(settings.get("protagonists") or "").strip())
     existing = comfyui_director.current_voice_ref()
@@ -386,6 +403,7 @@ def _extract_cast_to_session(*, uploaded, source_url: str, start_s: float, end_s
                     work_dir / "speakers",
                     start_seconds=start_clip,
                     duration_seconds=duration_s if end_s or start_s else None,
+                    face_count=len(faces),
                 )
             except Exception as exc:  # noqa: BLE001
                 st.warning(f"No pude separar locutores automáticamente: {exc}")
@@ -410,6 +428,23 @@ def _extract_cast_to_session(*, uploaded, source_url: str, start_s: float, end_s
             except Exception as exc:  # noqa: BLE001
                 if not speakers:
                     st.warning(f"No pude recortar una muestra de voz: {exc}")
+            try:
+                total = director_characters.extract_full_voice_reference(
+                    audio_source,
+                    work_dir / "speakers" / "recorte_total.wav",
+                    max_seconds=60.0,
+                )
+                speakers.append(
+                    director_characters.SpeakerCandidate(
+                        speaker_id="total",
+                        wav_path=str(total),
+                        count=1,
+                        duration=0.0,
+                        segments=[],
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                st.warning(f"No pude armar el recorte total del audio: {exc}")
         mapping = director_characters.map_faces_to_speakers(faces, speakers)
         st.session_state["director_cast_faces"] = [
             {
@@ -458,13 +493,27 @@ def _render_cast_draft() -> None:
     speaker_options = [""] + [item["speaker_id"] for item in speakers]
     speaker_labels = {"": "(sin voz)"}
     for item in speakers:
-        speaker_labels[item["speaker_id"]] = (
-            f"Locutor {item['speaker_id']}"
-            if item["speaker_id"] != "recorte"
-            else "Recorte manual (inicio/fin)"
-        )
+        sid = item["speaker_id"]
+        if sid == "recorte":
+            speaker_labels[sid] = "Recorte manual (solo el tramo inicio/fin que marcaste)"
+        elif sid == "total":
+            speaker_labels[sid] = "Recorte total del audio (todo el habla del video, hasta 60 s)"
+        else:
+            speaker_labels[sid] = f"Locutor {sid} (diarizado)"
     if speakers:
-        st.caption("Escuchá las muestras y, si hace falta, asigná una a cada persona.")
+        st.caption(
+            "Escuchá las muestras y asigná una a cada persona. "
+            "Si el diarizado partió de más a un solo hablante, marcá "
+            "«usar todas como una sola voz» o elegí el recorte total."
+        )
+        merge_all = st.checkbox(
+            "🎬 Usar todas como una sola voz",
+            key="director_merge_all_voices",
+            help=(
+                "Une las muestras diarizadas (A, B, C…) en un solo voice_ref. "
+                "No incluye el recorte manual ni el recorte total, salvo que no haya otras."
+            ),
+        )
         cols = st.columns(min(4, len(speakers)))
         for index, speaker in enumerate(speakers):
             with cols[index % len(cols)]:
@@ -521,7 +570,19 @@ def _render_cast_draft() -> None:
         if st.button(f"🎬 Guardar {face.get('name') or cluster} en el catálogo", key=f"director_save_char_{cluster}"):
             try:
                 wav = ""
-                if face.get("speaker_id"):
+                if st.session_state.get("director_merge_all_voices"):
+                    auto = [
+                        item["wav_path"]
+                        for item in speakers
+                        if item["speaker_id"] not in {"", "recorte", "total"}
+                    ]
+                    if not auto:
+                        auto = [item["wav_path"] for item in speakers if item.get("wav_path")]
+                    if auto:
+                        merged = director_characters.characters_dir() / "_inbox" / "voz_unida.wav"
+                        director_characters.concat_audio_files(auto, merged)
+                        wav = str(merged)
+                elif face.get("speaker_id"):
                     wav = next(
                         (
                             item["wav_path"]
